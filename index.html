@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>午餐點餐系統</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Huninn&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{
+  --yellow:#F6CE53;        /* 菜單主黃 */
+  --yellow-deep:#EDBB2E;
+  --cream:#FFF8DF;         /* 卡片米黃 */
+  --paper:#FFFDF3;
+  --ink:#3A2A18;           /* 深棕墨色 */
+  --red:#B03A2E;           /* 標題紅 */
+  --red-dark:#7E241A;
+  --green:#2E7D32;
+  --shadow:0 3px 0 rgba(122,84,10,.25);
+  --radius:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{
+  font-family:'Huninn','Noto Sans TC',sans-serif;
+  background:var(--yellow);
+  color:var(--ink);
+  min-height:100vh;
+  font-size:16px;
+  line-height:1.6;
+}
+.wrap{max-width:560px;margin:0 auto;padding:16px 14px 120px}
+
+/* ── 標題（仿菜單紅圓章）── */
+.brand{display:flex;align-items:center;justify-content:center;gap:6px;margin:6px 0 2px}
+.brand .ch{
+  background:var(--red);color:#fff;font-size:22px;font-weight:700;
+  width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  border:3px solid var(--ink);box-shadow:2px 2px 0 var(--ink);
+}
+.brand .cat{font-size:34px;line-height:1;filter:drop-shadow(2px 2px 0 rgba(0,0,0,.15))}
+.subtitle{text-align:center;font-size:14px;letter-spacing:4px;color:var(--red-dark);font-weight:700;margin-bottom:12px}
+
+/* ── 卡片 ── */
+.card{
+  background:var(--paper);border:3px solid var(--ink);border-radius:var(--radius);
+  box-shadow:4px 4px 0 rgba(58,42,24,.85);padding:16px;margin-bottom:16px;
+}
+.card h2{
+  color:var(--red);font-size:19px;margin-bottom:10px;display:flex;align-items:center;gap:6px;
+}
+.card h2::before{content:'【'}.card h2::after{content:'】'}
+.dashed{border-top:2px dashed #b99b58;margin:12px 0}
+
+/* ── 表單元件 ── */
+label.f{display:block;font-weight:700;margin:10px 0 4px;font-size:15px}
+input[type=text],input[type=password],input[type=date],input[type=time],select,textarea{
+  width:100%;padding:10px 12px;font-size:16px;font-family:inherit;
+  border:2px solid var(--ink);border-radius:10px;background:#fff;color:var(--ink);
+}
+textarea{resize:vertical}
+input:focus,select:focus,textarea:focus{outline:3px solid var(--yellow-deep)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{
+  padding:8px 16px;border:2px solid var(--ink);border-radius:999px;background:#fff;
+  font-size:16px;font-family:inherit;cursor:pointer;font-weight:700;
+}
+.chip.on{background:var(--red);color:#fff;border-color:var(--red-dark)}
+
+/* ── 菜單品項 ── */
+.cat-title{
+  color:var(--red);font-weight:900;font-size:17px;margin:14px 0 4px;
+}
+.cat-title::before{content:'【'}.cat-title::after{content:'】'}
+.item{
+  display:flex;align-items:center;gap:8px;padding:9px 2px;
+  border-bottom:2px dashed #c9ad6b;
+}
+.item .nm{flex:1;font-size:15.5px}
+.item .pr{font-weight:900;font-size:16px;white-space:nowrap}
+.stepper{display:flex;align-items:center;gap:2px}
+.stepper button{
+  width:34px;height:34px;border-radius:10px;border:2px solid var(--ink);
+  background:#fff;font-size:19px;font-weight:900;cursor:pointer;color:var(--ink);
+  display:flex;align-items:center;justify-content:center;font-family:inherit;
+}
+.stepper button.plus{background:var(--yellow)}
+.stepper .qty{width:28px;text-align:center;font-weight:900;font-size:17px}
+.item-note{margin:2px 0 8px 0}
+.item-note input{padding:7px 10px;font-size:14px;border-radius:8px}
+
+/* ── 底部結帳列 ── */
+.bottombar{
+  position:fixed;left:0;right:0;bottom:0;z-index:50;
+  background:var(--paper);border-top:3px solid var(--ink);
+  padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+}
+.bottombar .in{max-width:560px;margin:0 auto;display:flex;align-items:center;gap:12px}
+.bottombar .sum{flex:1;font-weight:900;font-size:17px}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  padding:12px 22px;border-radius:12px;border:3px solid var(--ink);
+  background:var(--red);color:#fff;font-size:17px;font-weight:900;cursor:pointer;
+  font-family:inherit;box-shadow:3px 3px 0 rgba(58,42,24,.85);
+}
+.btn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 rgba(58,42,24,.85)}
+.btn.gray{background:#fff;color:var(--ink)}
+.btn.green{background:var(--green)}
+.btn.sm{padding:7px 14px;font-size:14px;border-width:2px;box-shadow:2px 2px 0 rgba(58,42,24,.85)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ── 公告 / 狀態 ── */
+.notice{
+  background:#FFF3B8;border:2px dashed var(--red);border-radius:10px;
+  padding:10px 12px;font-size:14.5px;color:var(--red-dark);font-weight:700;margin-bottom:10px;
+}
+.closed-banner{
+  text-align:center;padding:30px 10px;
+}
+.closed-banner .big{font-size:26px;font-weight:900;color:var(--red)}
+.countdown{
+  text-align:center;font-size:14px;font-weight:700;color:var(--red-dark);
+  background:var(--cream);border:2px solid var(--ink);border-radius:999px;
+  padding:6px 12px;display:inline-block;
+}
+.center{text-align:center}
+.muted{color:#8a7550;font-size:13.5px}
+.namelist{font-size:14px;line-height:1.9}
+.namelist b{color:var(--red)}
+
+/* ── 我的訂單摘要 ── */
+.myorder{background:var(--cream);border:2px solid var(--ink);border-radius:10px;padding:10px 12px;font-size:15px}
+.myorder li{margin-left:1.2em}
+
+/* ── 管理頁 ── */
+.tabs{display:flex;gap:6px;margin-bottom:14px}
+.tab{
+  flex:1;text-align:center;padding:9px 4px;border:2px solid var(--ink);border-radius:10px;
+  background:#fff;font-weight:900;cursor:pointer;font-size:15px;
+}
+.tab.on{background:var(--ink);color:var(--yellow)}
+.list-row{
+  display:flex;align-items:center;gap:8px;padding:8px 2px;border-bottom:2px dashed #c9ad6b;font-size:15px;
+}
+.list-row .grow{flex:1}
+pre.line-out{
+  white-space:pre-wrap;background:#fff;border:2px solid var(--ink);border-radius:10px;
+  padding:12px;font-family:'Noto Sans TC',sans-serif;font-size:14px;line-height:1.7;
+}
+.toast{
+  position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99;
+  background:var(--ink);color:var(--yellow);padding:10px 20px;border-radius:999px;
+  font-weight:900;font-size:15px;opacity:0;transition:opacity .25s;pointer-events:none;
+  max-width:90vw;text-align:center;
+}
+.toast.show{opacity:1}
+.footcat{text-align:center;font-size:40px;margin-top:6px;filter:drop-shadow(2px 2px 0 rgba(0,0,0,.12))}
+.adminlink{display:block;text-align:center;margin-top:14px;color:#8a7550;font-size:12px;text-decoration:none}
+@media (prefers-reduced-motion:no-preference){
+  .footcat{animation:bob 2.4s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+}
+</style>
+</head>
+<body>
+<div class="toast" id="toast"></div>
+<div class="wrap" id="app">
+  <div class="brand" id="brandTitle"></div>
+  <div class="subtitle" id="brandSub">同事午餐點餐</div>
+  <div id="view"></div>
+  <div class="footcat">🐈</div>
+  <a class="adminlink" href="#admin">⚙ 管理</a>
+</div>
+<div class="bottombar" id="bottombar" style="display:none">
+  <div class="in">
+    <div class="sum" id="cartSum">0 份 / $0</div>
+    <button class="btn" id="submitBtn" onclick="submitOrder()">送出訂單</button>
+  </div>
+</div>
+
+<script>
+/* ══════════════ 設定 ══════════════ */
+const SUPABASE_URL = 'https://euzcnkxxqwvkzutopwau.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_iW5bLz3gFFVvCP6MLTRIww_YZTOkNGb';
+const ADMIN_PASSWORD = '5888';                     // ← 管理頁密碼，請自行修改
+const OFFICES = ['837','69','67前面','67後面'];
+const APP_TITLE = '今日點餐';                       // 頁首紅章文字
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+/* ══════════════ 工具 ══════════════ */
+const $ = id => document.getElementById(id);
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const WD = ['日','一','二','三','四','五','六'];
+function taipeiNow(){ return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Taipei'})); }
+function dstr(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function mdw(dateStr){ const d=new Date(dateStr+'T00:00:00'); return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})`; }
+function cutoffOf(menu){  // 結單時間＝用餐日「前一天」的 cutoff_time（台灣時間）
+  const d = new Date(menu.menu_date+'T00:00:00');
+  d.setDate(d.getDate()-1);
+  const [h,m] = (menu.cutoff_time||'15:30').slice(0,5).split(':');
+  d.setHours(+h,+m,0,0);
+  return d;
+}
+function isOpen(menu){ return !menu.is_closed && taipeiNow() < cutoffOf(menu); }
+function money(n){ return '$'+Number(n||0).toLocaleString(); }
+let toastTimer=null;
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2200); }
+
+/* ══════════════ 全域狀態 ══════════════ */
+let state = { menu:null, restaurant:null, items:[], cart:{}, notes:{}, office:localStorage.getItem('office')||'', name:localStorage.getItem('name')||'', myOrderId:null, orders:[] };
+let adminState = { tab:'schedule', restaurants:[], menus:[], curRest:null, curItems:[], sumDate:null };
+
+/* ══════════════ 路由 ══════════════ */
+window.addEventListener('hashchange', route);
+function route(){
+  $('bottombar').style.display='none';
+  if(location.hash==='#admin'){ renderAdminGate(); } else { loadOrderPage(); }
+}
+
+/* ══════════════ 標題 ══════════════ */
+function renderBrand(){
+  $('brandTitle').innerHTML = `<span class="cat">🐱</span>` + [...APP_TITLE].map(c=>`<span class="ch">${esc(c)}</span>`).join('');
+}
+
+/* ╔═══════════════════════════════════╗
+   ║           同事點餐頁               ║
+   ╚═══════════════════════════════════╝ */
+async function loadOrderPage(){
+  $('view').innerHTML = '<div class="card center">載入中…🍜</div>';
+  const today = dstr(taipeiNow());
+  const { data:menus, error } = await sb.from('daily_menus').select('*').gte('menu_date', today).order('menu_date');
+  if(error){ $('view').innerHTML = `<div class="card center">連線失敗，請重新整理 🙏<div class="muted">${esc(error.message)}</div></div>`; return; }
+  const open = (menus||[]).find(isOpen);
+  if(!open){
+    const next = (menus||[])[0];
+    let msg = next
+      ? `<div class="muted" style="margin-top:8px">${mdw(next.menu_date)} 的訂單已結單<br>請等待管理員開放下一次點餐</div>`
+      : `<div class="muted" style="margin-top:8px">目前沒有開放中的訂單<br>請等待管理員排菜單</div>`;
+    $('view').innerHTML = `<div class="card closed-banner"><div class="big">已 結 單</div>${msg}</div>`;
+    return;
+  }
+  state.menu = open; state.cart={}; state.notes={}; state.myOrderId=null;
+  const [r1,r2,r3] = await Promise.all([
+    sb.from('restaurants').select('*').eq('id', open.restaurant_id).single(),
+    sb.from('menu_items').select('*').eq('restaurant_id', open.restaurant_id).eq('active',true).order('sort_order'),
+    sb.from('orders').select('*').eq('menu_date', open.menu_date)
+  ]);
+  state.restaurant = r1.data; state.items = r2.data||[]; state.orders = r3.data||[];
+  renderOrderPage();
+}
+
+function renderOrderPage(){
+  const m=state.menu, r=state.restaurant;
+  const co=cutoffOf(m);
+  const groups={};
+  state.items.forEach(it=>{ (groups[it.category||'其他'] ||= []).push(it); });
+  const orderedNames = {};
+  state.orders.forEach(o=>{ (orderedNames[o.office] ||= []).push(o.customer_name); });
+
+  let html = `
+  <div class="card">
+    <h2>${esc(mdw(m.menu_date))} 訂：${esc(r?.name||'')}</h2>
+    <div class="center" style="margin-bottom:8px"><span class="countdown" id="cd">⏰ 結單：${co.getMonth()+1}/${co.getDate()} ${String(co.getHours()).padStart(2,'0')}:${String(co.getMinutes()).padStart(2,'0')}</span></div>
+    ${m.announcement?`<div class="notice">📣 ${esc(m.announcement)}</div>`:''}
+    ${r?.note?`<div class="muted">ℹ️ ${esc(r.note)}</div>`:''}
+  </div>
+
+  <div class="card">
+    <h2>基本資料</h2>
+    <label class="f">辦公室</label>
+    <div class="chips">${OFFICES.map(o=>`<button class="chip ${state.office===o?'on':''}" onclick="pickOffice('${o}')">${o}</button>`).join('')}</div>
+    <label class="f">姓名</label>
+    <input type="text" id="nameInput" placeholder="請輸入姓名" value="${esc(state.name)}" oninput="onName(this.value)">
+    <div class="muted" style="margin-top:6px">✏️ 送出後想改？用同一個辦公室＋姓名再次進來即可修改</div>
+    <div id="loadedHint"></div>
+  </div>
+
+  <div class="card">
+    <h2>菜單</h2>`;
+  for(const cat in groups){
+    html += `<div class="cat-title">${esc(cat)}</div>`;
+    groups[cat].forEach(it=>{
+      const q = state.cart[it.id]||0;
+      html += `
+      <div class="item">
+        <div class="nm">${esc(it.name)}</div>
+        <div class="pr">${it.price}</div>
+        <div class="stepper">
+          <button onclick="chg('${it.id}',-1)">−</button>
+          <div class="qty" id="q_${it.id}">${q}</div>
+          <button class="plus" onclick="chg('${it.id}',1)">＋</button>
+        </div>
+      </div>
+      <div class="item-note" id="n_${it.id}" style="display:${q>0?'block':'none'}">
+        <input type="text" placeholder="備註（例：小辣、不要香菜）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">
+      </div>`;
+    });
+  }
+  html += `</div>`;
+
+  const totalOrders = state.orders.length;
+  html += `<div class="card">
+    <h2>已點名單（${totalOrders} 人）</h2>
+    <div class="namelist">${
+      totalOrders===0 ? '<span class="muted">還沒有人點餐，當第一個吧！</span>'
+      : OFFICES.filter(o=>orderedNames[o]).map(o=>`<b>${o}</b>：${orderedNames[o].map(esc).join('、')}`).join('<br>')
+    }</div>
+  </div>`;
+
+  $('view').innerHTML = html;
+  $('bottombar').style.display='block';
+  updateCartBar();
+  tryLoadMyOrder();
+  startCountdown();
+}
+
+let cdTimer=null;
+function startCountdown(){
+  clearInterval(cdTimer);
+  cdTimer = setInterval(()=>{
+    if(!state.menu || location.hash==='#admin') { clearInterval(cdTimer); return; }
+    const ms = cutoffOf(state.menu) - taipeiNow();
+    const el = $('cd'); if(!el) return;
+    if(ms<=0){ clearInterval(cdTimer); toast('已到結單時間'); loadOrderPage(); return; }
+    const h=Math.floor(ms/3600000), mi=Math.floor(ms%3600000/60000), s=Math.floor(ms%60000/1000);
+    el.textContent = `⏰ 距結單 ${h>0?h+'小時':''}${mi}分${s}秒`;
+  },1000);
+}
+
+function pickOffice(o){ state.office=o; localStorage.setItem('office',o); renderOrderPage(); }
+function onName(v){ state.name=v.trim(); localStorage.setItem('name',state.name); clearTimeout(onName.t); onName.t=setTimeout(tryLoadMyOrder,600); }
+function chg(id,d){
+  const q = Math.max(0, Math.min(9,(state.cart[id]||0)+d));
+  if(q===0) delete state.cart[id]; else state.cart[id]=q;
+  $('q_'+id).textContent=q;
+  $('n_'+id).style.display = q>0?'block':'none';
+  updateCartBar();
+}
+function cartTotal(){
+  let n=0,amt=0;
+  for(const id in state.cart){
+    const it = state.items.find(x=>x.id===id); if(!it) continue;
+    n += state.cart[id]; amt += state.cart[id]*it.price;
+  }
+  return {n,amt};
+}
+function updateCartBar(){
+  const {n,amt}=cartTotal();
+  $('cartSum').textContent = `${n} 份 / ${money(amt)}`;
+  $('submitBtn').textContent = state.myOrderId ? '更新訂單' : '送出訂單';
+}
+
+async function tryLoadMyOrder(){
+  if(!state.office||!state.name||!state.menu) return;
+  const { data } = await sb.from('orders').select('*')
+    .eq('menu_date',state.menu.menu_date).eq('office',state.office).eq('customer_name',state.name).maybeSingle();
+  const hint=$('loadedHint');
+  if(data){
+    state.myOrderId = data.id;
+    state.cart={}; state.notes={};
+    (data.items||[]).forEach(x=>{ state.cart[x.item_id]=x.qty; if(x.note) state.notes[x.item_id]=x.note; });
+    (data.items||[]).forEach(x=>{
+      const q=$('q_'+x.item_id), nb=$('n_'+x.item_id);
+      if(q){ q.textContent=x.qty; }
+      if(nb){ nb.style.display='block'; nb.querySelector('input').value=x.note||''; }
+    });
+    if(hint) hint.innerHTML = `<div class="notice" style="margin-top:8px">📋 已載入你先前的訂單，可直接修改後按「更新訂單」<br><button class="btn sm gray" style="margin-top:6px" onclick="cancelMyOrder()">🗑 取消整筆訂單</button></div>`;
+    updateCartBar();
+  } else {
+    state.myOrderId=null;
+    if(hint) hint.innerHTML='';
+    updateCartBar();
+  }
+}
+
+async function submitOrder(){
+  if(!isOpen(state.menu)){ toast('已結單，無法送出'); loadOrderPage(); return; }
+  if(!state.office) return toast('請先選辦公室');
+  if(!state.name) return toast('請先輸入姓名');
+  const {n,amt}=cartTotal();
+  if(n===0) return toast('還沒選餐點喔');
+  const items = Object.keys(state.cart).map(id=>{
+    const it=state.items.find(x=>x.id===id);
+    return { item_id:id, name:it.name, price:it.price, qty:state.cart[id], note:(state.notes[id]||'').trim() };
+  });
+  const row = { menu_date:state.menu.menu_date, office:state.office, customer_name:state.name, items, total:amt, updated_at:new Date().toISOString() };
+  $('submitBtn').disabled=true;
+  const { error } = state.myOrderId
+    ? await sb.from('orders').update(row).eq('id',state.myOrderId)
+    : await sb.from('orders').insert(row);
+  $('submitBtn').disabled=false;
+  if(error){
+    if(error.code==='23505'){ toast('這個姓名已點過，正在載入你的訂單'); tryLoadMyOrder(); return; }
+    return toast('送出失敗：'+error.message);
+  }
+  toast(state.myOrderId?'✅ 訂單已更新！':'✅ 點餐成功！');
+  loadOrderPage();
+}
+
+async function cancelMyOrder(){
+  if(!state.myOrderId) return;
+  if(!confirm('確定要取消整筆訂單嗎？')) return;
+  const { error } = await sb.from('orders').delete().eq('id',state.myOrderId);
+  if(error) return toast('取消失敗：'+error.message);
+  toast('已取消訂單');
+  loadOrderPage();
+}
+
+/* ╔═══════════════════════════════════╗
+   ║             管理頁                 ║
+   ╚═══════════════════════════════════╝ */
+function renderAdminGate(){
+  if(sessionStorage.getItem('adm')==='1') return loadAdmin();
+  $('view').innerHTML = `
+  <div class="card">
+    <h2>管理登入</h2>
+    <input type="password" id="pw" placeholder="請輸入管理密碼" onkeydown="if(event.key==='Enter')adminLogin()">
+    <div class="center" style="margin-top:12px"><button class="btn" onclick="adminLogin()">登入</button></div>
+  </div>`;
+}
+function adminLogin(){
+  if($('pw').value===ADMIN_PASSWORD){ sessionStorage.setItem('adm','1'); loadAdmin(); }
+  else toast('密碼錯誤');
+}
+
+async function loadAdmin(){
+  $('view').innerHTML='<div class="card center">載入中…</div>';
+  const [r1,r2] = await Promise.all([
+    sb.from('restaurants').select('*').order('created_at'),
+    sb.from('daily_menus').select('*').order('menu_date',{ascending:false}).limit(30)
+  ]);
+  adminState.restaurants=r1.data||[]; adminState.menus=r2.data||[];
+  if(!adminState.sumDate){
+    const t=dstr(taipeiNow());
+    const near = [...adminState.menus].sort((a,b)=>a.menu_date<b.menu_date?-1:1).find(m=>m.menu_date>=t) || adminState.menus[0];
+    adminState.sumDate = near?near.menu_date:t;
+  }
+  renderAdmin();
+}
+
+function renderAdmin(){
+  let html = `
+  <div class="tabs">
+    <div class="tab ${adminState.tab==='schedule'?'on':''}" onclick="admTab('schedule')">📅 排菜單</div>
+    <div class="tab ${adminState.tab==='rest'?'on':''}" onclick="admTab('rest')">🏪 店家</div>
+    <div class="tab ${adminState.tab==='sum'?'on':''}" onclick="admTab('sum')">📊 彙總</div>
+  </div>`;
+  if(adminState.tab==='schedule') html+=admScheduleHtml();
+  if(adminState.tab==='rest') html+=admRestHtml();
+  if(adminState.tab==='sum') html+=admSumHtml();
+  html += `<div class="center" style="margin-top:4px"><a class="adminlink" href="#" onclick="location.hash='';return false">← 回點餐頁</a></div>`;
+  $('view').innerHTML=html;
+  if(adminState.tab==='rest' && adminState.curRest) loadRestItems();
+  if(adminState.tab==='sum') buildSummary();
+}
+function admTab(t){ adminState.tab=t; renderAdmin(); }
+
+/* ── 排菜單 ── */
+function admScheduleHtml(){
+  const tmr = new Date(taipeiNow()); tmr.setDate(tmr.getDate()+1);
+  const today = dstr(taipeiNow());
+  const upcoming = adminState.menus.filter(m=>m.menu_date>=today).sort((a,b)=>a.menu_date<b.menu_date?-1:1);
+  return `
+  <div class="card">
+    <h2>排每日菜單</h2>
+    <label class="f">用餐日期</label>
+    <input type="date" id="mDate" value="${dstr(tmr)}">
+    <label class="f">店家</label>
+    <select id="mRest">${adminState.restaurants.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>
+    <label class="f">結單時間（用餐日<b style="color:var(--red)">前一天</b>的這個時間）</label>
+    <input type="time" id="mCut" value="15:30">
+    <label class="f">公告（選填，會顯示給同事）</label>
+    <input type="text" id="mAnn" placeholder="例：湯品可備註辣度">
+    <div class="center" style="margin-top:12px"><button class="btn" onclick="saveMenu()">發布 / 更新</button></div>
+  </div>
+  <div class="card">
+    <h2>近期菜單</h2>
+    ${upcoming.length===0?'<div class="muted">尚未排任何菜單</div>':''}
+    ${upcoming.map(m=>{
+      const r=adminState.restaurants.find(x=>x.id===m.restaurant_id);
+      const st = m.is_closed?'🔒已結單':(isOpen(m)?'🟢開放中':'⏰已過結單時間');
+      return `<div class="list-row">
+        <div class="grow"><b>${mdw(m.menu_date)}</b> ${esc(r?.name||'?')}<br><span class="muted">${st}｜結單 ${(m.cutoff_time||'').slice(0,5)}</span></div>
+        <button class="btn sm gray" onclick="toggleClose('${m.id}',${!m.is_closed})">${m.is_closed?'重新開放':'提前結單'}</button>
+        <button class="btn sm gray" onclick="delMenu('${m.id}')">刪除</button>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+async function saveMenu(){
+  const row = { menu_date:$('mDate').value, restaurant_id:$('mRest').value, cutoff_time:$('mCut').value, announcement:$('mAnn').value.trim()||null, is_closed:false };
+  if(!row.menu_date||!row.restaurant_id) return toast('請選日期與店家');
+  const { error } = await sb.from('daily_menus').upsert(row,{onConflict:'menu_date'});
+  if(error) return toast('儲存失敗：'+error.message);
+  toast('✅ 菜單已發布');
+  loadAdmin();
+}
+async function toggleClose(id,close){
+  const { error } = await sb.from('daily_menus').update({is_closed:close}).eq('id',id);
+  if(error) return toast(error.message);
+  toast(close?'已結單':'已重新開放');
+  loadAdmin();
+}
+async function delMenu(id){
+  if(!confirm('刪除這天的菜單？（訂單不會被刪除）')) return;
+  const { error } = await sb.from('daily_menus').delete().eq('id',id);
+  if(error) return toast(error.message);
+  loadAdmin();
+}
+
+/* ── 店家管理 ── */
+function admRestHtml(){
+  return `
+  <div class="card">
+    <h2>店家管理</h2>
+    <label class="f">選擇店家</label>
+    <select id="restSel" onchange="adminState.curRest=this.value;loadRestItems()">
+      <option value="">— 新增店家 —</option>
+      ${adminState.restaurants.map(r=>`<option value="${r.id}" ${adminState.curRest===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}
+    </select>
+    <label class="f">店名</label>
+    <input type="text" id="rName" placeholder="例：食尚胡椒豬肚雞">
+    <label class="f">電話（選填）</label>
+    <input type="text" id="rPhone">
+    <label class="f">店家備註（選填，會顯示給同事）</label>
+    <input type="text" id="rNote" placeholder="例：每週日公休">
+    <div class="center" style="margin-top:12px">
+      <button class="btn" onclick="saveRest()">儲存店家</button>
+      <button class="btn sm gray" id="delRestBtn" style="display:none" onclick="delRest()">刪除店家</button>
+    </div>
+  </div>
+  <div class="card" id="itemsCard" style="display:none">
+    <h2>菜單品項</h2>
+    <div id="itemList" class="muted">載入中…</div>
+    <div class="dashed"></div>
+    <label class="f">批次貼上新增（一行一項：<span style="color:var(--red)">品名 價格</span>；【分類】可換分類）</label>
+    <textarea id="bulkItems" rows="6" placeholder="【熱湯區】
+招牌胡椒豬肚雞（嫩雞腿） 130
+招牌胡椒豬肚雞（土雞腿） 160
+【單點】
+白飯 10"></textarea>
+    <div class="center" style="margin-top:10px"><button class="btn" onclick="bulkAdd()">批次新增</button></div>
+  </div>`;
+}
+async function loadRestItems(){
+  const id = adminState.curRest;
+  const r = adminState.restaurants.find(x=>x.id===id);
+  $('rName').value=r?.name||''; $('rPhone').value=r?.phone||''; $('rNote').value=r?.note||'';
+  $('delRestBtn').style.display = r?'inline-flex':'none';
+  $('itemsCard').style.display = r?'block':'none';
+  if(!r) return;
+  const { data } = await sb.from('menu_items').select('*').eq('restaurant_id',id).order('sort_order');
+  adminState.curItems=data||[];
+  $('itemList').innerHTML = adminState.curItems.length===0 ? '尚無品項，請在下方批次新增'
+    : adminState.curItems.map(it=>`<div class="list-row">
+        <div class="grow">${it.category?`<span class="muted">[${esc(it.category)}]</span> `:''}${esc(it.name)} <b>$${it.price}</b></div>
+        <button class="btn sm gray" onclick="delItem('${it.id}')">刪除</button>
+      </div>`).join('');
+}
+async function saveRest(){
+  const name=$('rName').value.trim();
+  if(!name) return toast('請輸入店名');
+  const row={name,phone:$('rPhone').value.trim()||null,note:$('rNote').value.trim()||null};
+  let error;
+  if(adminState.curRest){ ({error} = await sb.from('restaurants').update(row).eq('id',adminState.curRest)); }
+  else {
+    const res = await sb.from('restaurants').insert(row).select().single();
+    error=res.error; if(res.data) adminState.curRest=res.data.id;
+  }
+  if(error) return toast('儲存失敗：'+error.message);
+  toast('✅ 店家已儲存');
+  const r1=await sb.from('restaurants').select('*').order('created_at');
+  adminState.restaurants=r1.data||[];
+  renderAdmin();
+}
+async function delRest(){
+  if(!confirm('刪除店家會連同其菜單品項一起刪除，確定？')) return;
+  const { error } = await sb.from('restaurants').delete().eq('id',adminState.curRest);
+  if(error) return toast(error.message);
+  adminState.curRest=null;
+  loadAdmin();
+}
+async function bulkAdd(){
+  const lines=$('bulkItems').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(lines.length===0) return toast('請先貼上內容');
+  let cat='', rows=[], sort=(adminState.curItems.at(-1)?.sort_order||0)+1;
+  for(const ln of lines){
+    const mc=ln.match(/^【(.+)】$/);
+    if(mc){ cat=mc[1]; continue; }
+    const mm=ln.match(/^(.*?)[\s,，\t]+\$?(\d+)$/);
+    if(!mm) return toast(`格式看不懂：「${ln}」（要「品名 價格」）`);
+    rows.push({restaurant_id:adminState.curRest,category:cat,name:mm[1].trim(),price:+mm[2],sort_order:sort++});
+  }
+  const { error } = await sb.from('menu_items').insert(rows);
+  if(error) return toast('新增失敗：'+error.message);
+  toast(`✅ 已新增 ${rows.length} 個品項`);
+  $('bulkItems').value='';
+  loadRestItems();
+}
+async function delItem(id){
+  const { error } = await sb.from('menu_items').delete().eq('id',id);
+  if(error) return toast(error.message);
+  loadRestItems();
+}
+
+/* ── 訂單彙總 ── */
+function admSumHtml(){
+  const opts=[...new Set(adminState.menus.map(m=>m.menu_date))].sort().reverse();
+  return `
+  <div class="card">
+    <h2>訂單彙總</h2>
+    <label class="f">用餐日期</label>
+    <select id="sumDate" onchange="adminState.sumDate=this.value;buildSummary()">
+      ${opts.map(d=>`<option value="${d}" ${adminState.sumDate===d?'selected':''}>${mdw(d)}</option>`).join('')}
+    </select>
+    <div id="sumBody" style="margin-top:12px" class="muted">載入中…</div>
+  </div>`;
+}
+async function buildSummary(){
+  const date=adminState.sumDate;
+  const menu=adminState.menus.find(m=>m.menu_date===date);
+  if(!menu){ $('sumBody').innerHTML='這天沒有菜單'; return; }
+  const [r1,r2]=await Promise.all([
+    sb.from('restaurants').select('*').eq('id',menu.restaurant_id).single(),
+    sb.from('orders').select('*').eq('menu_date',date).order('office').order('created_at')
+  ]);
+  const rest=r1.data, orders=r2.data||[];
+  if(orders.length===0){ $('sumBody').innerHTML='這天還沒有任何訂單'; return; }
+
+  // 品項統計
+  const stat={}; let grandQty=0, grandAmt=0;
+  orders.forEach(o=>(o.items||[]).forEach(x=>{ stat[x.name]=(stat[x.name]||0)+x.qty; grandQty+=x.qty; grandAmt+=x.qty*x.price; }));
+
+  let txt=`📢 ${mdw(date)} 午餐訂單彙總\n🏪 ${rest?.name||''}${rest?.phone?`（${rest.phone}）`:''}\n`;
+  txt+=`━━━━━━━━━━\n🍱 品項統計（叫餐用）\n`;
+  for(const n in stat) txt+=`・${n} ×${stat[n]}\n`;
+  txt+=`共 ${grandQty} 份\n━━━━━━━━━━\n`;
+  for(const off of OFFICES){
+    const os=orders.filter(o=>o.office===off);
+    if(os.length===0) continue;
+    const offAmt=os.reduce((s,o)=>s+(o.total||0),0);
+    txt+=`🏢 ${off}（${money(offAmt)}）\n`;
+    os.forEach(o=>{
+      const its=(o.items||[]).map(x=>`${x.name}×${x.qty}${x.note?`〔${x.note}〕`:''}`).join('、');
+      txt+=`・${o.customer_name}：${its} ${money(o.total)}\n`;
+    });
+    txt+=`\n`;
+  }
+  txt+=`━━━━━━━━━━\n💰 總金額：${money(grandAmt)}\n請大家確認自己的餐點，有問題請盡快告知 🙏`;
+
+  $('sumBody').innerHTML=`
+    <div class="muted">共 ${orders.length} 人／${grandQty} 份／${money(grandAmt)}</div>
+    <pre class="line-out" id="lineTxt">${esc(txt)}</pre>
+    <div class="center" style="margin-top:10px">
+      <button class="btn green" onclick="copyLine()">📋 複製 LINE 文字</button>
+    </div>`;
+  window._lineTxt=txt;
+}
+async function copyLine(){
+  try{ await navigator.clipboard.writeText(window._lineTxt); toast('✅ 已複製，去貼到 LINE 群組吧'); }
+  catch(e){
+    const ta=document.createElement('textarea'); ta.value=window._lineTxt; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); ta.remove(); toast('✅ 已複製');
+  }
+}
+
+/* ══════════════ 啟動 ══════════════ */
+renderBrand();
+route();
+</script>
+</body>
+</html>
