@@ -66,6 +66,7 @@ input:focus,select:focus,textarea:focus{outline:3px solid var(--yellow-deep)}
   font-size:16px;font-family:inherit;cursor:pointer;font-weight:700;
 }
 .chip.on{background:var(--red);color:#fff;border-color:var(--red-dark)}
+.chip.sp{padding:5px 12px;font-size:14px}
 
 /* ── 菜單品項 ── */
 .cat-title{
@@ -207,7 +208,7 @@ let toastTimer=null;
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2200); }
 
 /* ══════════════ 全域狀態 ══════════════ */
-let state = { menu:null, restaurant:null, items:[], cart:{}, notes:{}, office:localStorage.getItem('office')||'', name:localStorage.getItem('name')||'', myOrderId:null, orders:[] };
+let state = { menu:null, restaurant:null, items:[], cart:{}, notes:{}, spicy:{}, office:localStorage.getItem('office')||'', name:localStorage.getItem('name')||'', myOrderId:null, orders:[] };
 let adminState = { tab:'schedule', restaurants:[], menus:[], curRest:null, curItems:[], sumDate:null };
 
 /* ══════════════ 路由 ══════════════ */
@@ -239,7 +240,7 @@ async function loadOrderPage(){
     $('view').innerHTML = `<div class="card closed-banner"><div class="big">已 結 單</div>${msg}</div>`;
     return;
   }
-  state.menu = open; state.cart={}; state.notes={}; state.myOrderId=null;
+  state.menu = open; state.cart={}; state.notes={}; state.spicy={}; state.myOrderId=null;
   const [r1,r2,r3] = await Promise.all([
     sb.from('restaurants').select('*').eq('id', open.restaurant_id).single(),
     sb.from('menu_items').select('*').eq('restaurant_id', open.restaurant_id).eq('active',true).order('sort_order'),
@@ -292,7 +293,11 @@ function renderOrderPage(){
         </div>
       </div>
       <div class="item-note" id="n_${it.id}" style="display:${q>0?'block':'none'}">
-        <input type="text" placeholder="備註（例：小辣、不要香菜）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">
+        <div class="chips" style="margin-bottom:6px">
+          <button class="chip sp ${state.spicy[it.id]==='加辣'?'on':''}" id="spa_${it.id}" onclick="setSpicy('${it.id}','加辣')">🌶 加辣</button>
+          <button class="chip sp ${state.spicy[it.id]==='不辣'?'on':''}" id="spb_${it.id}" onclick="setSpicy('${it.id}','不辣')">不辣</button>
+        </div>
+        <input type="text" placeholder="備註（例：換溫泉蛋、不要香菜）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">
       </div>`;
     });
   }
@@ -329,6 +334,12 @@ function startCountdown(){
 
 function pickOffice(o){ state.office=o; localStorage.setItem('office',o); renderOrderPage(); }
 function onName(v){ state.name=v.trim(); localStorage.setItem('name',state.name); clearTimeout(onName.t); onName.t=setTimeout(tryLoadMyOrder,600); }
+function setSpicy(id,val){
+  state.spicy[id] = state.spicy[id]===val ? null : val;
+  const a=$('spa_'+id), b=$('spb_'+id);
+  if(a) a.classList.toggle('on', state.spicy[id]==='加辣');
+  if(b) b.classList.toggle('on', state.spicy[id]==='不辣');
+}
 function chg(id,d){
   const q = Math.max(0, Math.min(9,(state.cart[id]||0)+d));
   if(q===0) delete state.cart[id]; else state.cart[id]=q;
@@ -357,12 +368,15 @@ async function tryLoadMyOrder(){
   const hint=$('loadedHint');
   if(data){
     state.myOrderId = data.id;
-    state.cart={}; state.notes={};
-    (data.items||[]).forEach(x=>{ state.cart[x.item_id]=x.qty; if(x.note) state.notes[x.item_id]=x.note; });
+    state.cart={}; state.notes={}; state.spicy={};
+    (data.items||[]).forEach(x=>{ state.cart[x.item_id]=x.qty; if(x.note) state.notes[x.item_id]=x.note; if(x.spicy) state.spicy[x.item_id]=x.spicy; });
     (data.items||[]).forEach(x=>{
       const q=$('q_'+x.item_id), nb=$('n_'+x.item_id);
       if(q){ q.textContent=x.qty; }
       if(nb){ nb.style.display='block'; nb.querySelector('input').value=x.note||''; }
+      const a=$('spa_'+x.item_id), b=$('spb_'+x.item_id);
+      if(a) a.classList.toggle('on', x.spicy==='加辣');
+      if(b) b.classList.toggle('on', x.spicy==='不辣');
     });
     if(hint) hint.innerHTML = `<div class="notice" style="margin-top:8px">📋 已載入你先前的訂單，可直接修改後按「更新訂單」<br><button class="btn sm gray" style="margin-top:6px" onclick="cancelMyOrder()">🗑 取消整筆訂單</button></div>`;
     updateCartBar();
@@ -381,7 +395,7 @@ async function submitOrder(){
   if(n===0) return toast('還沒選餐點喔');
   const items = Object.keys(state.cart).map(id=>{
     const it=state.items.find(x=>x.id===id);
-    return { item_id:id, name:it.name, price:it.price, qty:state.cart[id], note:(state.notes[id]||'').trim() };
+    return { item_id:id, name:it.name, price:it.price, qty:state.cart[id], spicy:state.spicy[id]||'', note:(state.notes[id]||'').trim() };
   });
   const row = { menu_date:state.menu.menu_date, office:state.office, customer_name:state.name, items, total:amt, updated_at:new Date().toISOString() };
   $('submitBtn').disabled=true;
@@ -629,7 +643,7 @@ async function buildSummary(){
 
   // 品項統計
   const stat={}; let grandQty=0, grandAmt=0;
-  orders.forEach(o=>(o.items||[]).forEach(x=>{ stat[x.name]=(stat[x.name]||0)+x.qty; grandQty+=x.qty; grandAmt+=x.qty*x.price; }));
+  orders.forEach(o=>(o.items||[]).forEach(x=>{ const k=x.name+(x.spicy?`(${x.spicy})`:''); stat[k]=(stat[k]||0)+x.qty; grandQty+=x.qty; grandAmt+=x.qty*x.price; }));
 
   let txt=`📢 ${mdw(date)} 午餐訂單彙總\n🏪 ${rest?.name||''}${rest?.phone?`（${rest.phone}）`:''}\n`;
   txt+=`━━━━━━━━━━\n🍱 品項統計（叫餐用）\n`;
@@ -641,7 +655,10 @@ async function buildSummary(){
     const offAmt=os.reduce((s,o)=>s+(o.total||0),0);
     txt+=`🏢 ${off}（${money(offAmt)}）\n`;
     os.forEach(o=>{
-      const its=(o.items||[]).map(x=>`${x.name}×${x.qty}${x.note?`〔${x.note}〕`:''}`).join('、');
+      const its=(o.items||[]).map(x=>{
+        const tag=[x.spicy,x.note].filter(Boolean).join('、');
+        return `${x.name}×${x.qty}${tag?`〔${tag}〕`:''}`;
+      }).join('、');
       txt+=`・${o.customer_name}：${its} ${money(o.total)}\n`;
     });
     txt+=`\n`;
