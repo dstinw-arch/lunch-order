@@ -235,10 +235,10 @@ async function loadOrderPage(){
   const today = dstr(taipeiNow());
   const [mres, rres] = await Promise.all([
     sb.from('daily_menus').select('*').gte('menu_date', today).order('menu_date'),
-    sb.from('restaurants').select('id,name')
+    sb.from('restaurants').select('id,name,rtype')
   ]);
   if(mres.error){ $('view').innerHTML = `<div class="card center">連線失敗，請重新整理 🙏<div class="muted">${esc(mres.error.message)}</div></div>`; return; }
-  state.restMap = {}; (rres.data||[]).forEach(r=>state.restMap[r.id]=r.name);
+  state.restMap = {}; (rres.data||[]).forEach(r=>state.restMap[r.id]=r);
   state.menuList = (mres.data||[]).filter(isOpen);
   if(state.menuList.length===0){
     const next = (mres.data||[])[0];
@@ -275,8 +275,11 @@ function renderOrderPage(){
 
   let html = '';
   if(state.menuList.length>1){
-    html += `<div class="tabs" style="margin-bottom:12px">${state.menuList.map(x=>
-      `<div class="tab ${x.id===m.id?'on':''}" onclick="selectMenu('${x.id}')" style="line-height:1.3;padding:8px 4px">${mdw(x.menu_date)}<br><span style="font-size:13px">${esc(state.restMap[x.restaurant_id]||'')}</span></div>`).join('')}</div>`;
+    const em = t => t==='飲料'?'🥤':t==='團購'?'📦':'🍱';
+    html += `<div class="tabs" style="margin-bottom:12px">${state.menuList.map(x=>{
+      const ri = state.restMap[x.restaurant_id]||{};
+      return `<div class="tab ${x.id===m.id?'on':''}" onclick="selectMenu('${x.id}')" style="line-height:1.3;padding:8px 4px">${em(ri.rtype)} ${mdw(x.menu_date)}<br><span style="font-size:13px">${esc(ri.name||'')}</span></div>`;
+    }).join('')}</div>`;
   }
   html += `
   <div class="card">
@@ -325,6 +328,8 @@ function renderOrderPage(){
         opts += `<div class="chips" style="margin-bottom:6px">${ICES.map(s=>
           `<button class="chip sp ${(state.ice[it.id]||'正常')===s?'on':''}" id="ic_${it.id}_${s}" onclick="setIce('${it.id}','${s}')">${iceLbl(s)}</button>`).join('')}</div>`;
         opts += `<input type="text" placeholder="備註／加料+10（珍珠、蘆薈、椰果）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">`;
+      } else if((state.restaurant?.rtype)==='團購'){
+        opts += `<input type="text" placeholder="備註（選填）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">`;
       } else {
         opts += `<div class="chips" style="margin-bottom:6px">
           <button class="chip sp ${state.spicy[it.id]==='加辣'?'on':''}" id="spa_${it.id}" onclick="setSpicy('${it.id}','加辣')">🌶 加辣</button>
@@ -384,7 +389,7 @@ function setSpicy(id,val){
   if(b) b.classList.toggle('on', state.spicy[id]==='不辣');
 }
 function chg(id,d){
-  const q = Math.max(0, Math.min(9,(state.cart[id]||0)+d));
+  const q = Math.max(0, Math.min(30,(state.cart[id]||0)+d));
   if(q===0) delete state.cart[id]; else state.cart[id]=q;
   $('q_'+id).textContent=q;
   $('n_'+id).style.display = q>0?'block':'none';
@@ -517,7 +522,7 @@ function renderAdmin(){
   html += `<div class="center" style="margin-top:4px"><a class="adminlink" href="#" onclick="location.hash='';return false">← 回點餐頁</a></div>`;
   $('view').innerHTML=html;
   if(adminState.tab==='schedule') pickCutDay(!!adminState.cutSameDay);
-  if(adminState.tab==='rest' && adminState.curRest) loadRestItems();
+  if(adminState.tab==='rest'){ if(adminState.curRest) loadRestItems(); else pickRtype(adminState.curType||'午餐'); }
   if(adminState.tab==='sum') buildSummary();
 }
 function admTab(t){ adminState.tab=t; renderAdmin(); }
@@ -533,7 +538,10 @@ function admScheduleHtml(){
     <label class="f">用餐日期</label>
     <input type="date" id="mDate" value="${dstr(tmr)}">
     <label class="f">店家</label>
-    <select id="mRest">${adminState.restaurants.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>
+    <select id="mRest">${['午餐','飲料','團購'].map(t=>{
+      const rs=adminState.restaurants.filter(r=>(r.rtype||'午餐')===t);
+      return rs.length?`<optgroup label="${t==='午餐'?'🍱 午餐':t==='飲料'?'🥤 飲料':'📦 團購'}">${rs.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</optgroup>`:'';
+    }).join('')}</select>
     <label class="f">結單時間</label>
     <div class="chips" style="margin-bottom:8px">
       <button class="chip" id="cdPrev" onclick="pickCutDay(false)">用餐前一天（便當）</button>
@@ -597,8 +605,15 @@ function admRestHtml(){
     <label class="f">選擇店家</label>
     <select id="restSel" onchange="adminState.curRest=this.value;loadRestItems()">
       <option value="">— 新增店家 —</option>
-      ${adminState.restaurants.map(r=>`<option value="${r.id}" ${adminState.curRest===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}
+      ${['午餐','飲料','團購'].map(t=>{
+        const rs=adminState.restaurants.filter(r=>(r.rtype||'午餐')===t);
+        return rs.length?`<optgroup label="${t==='午餐'?'🍱 午餐':t==='飲料'?'🥤 飲料':'📦 團購'}">${rs.map(r=>`<option value="${r.id}" ${adminState.curRest===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}</optgroup>`:'';
+      }).join('')}
     </select>
+    <label class="f">分類</label>
+    <div class="chips">
+      ${['午餐','飲料','團購'].map(t=>`<button class="chip" id="rt_${t}" onclick="pickRtype('${t}')">${t}</button>`).join('')}
+    </div>
     <label class="f">店名</label>
     <input type="text" id="rName" placeholder="例：食尚胡椒豬肚雞">
     <label class="f">電話（選填）</label>
@@ -623,10 +638,15 @@ function admRestHtml(){
     <div class="center" style="margin-top:10px"><button class="btn" onclick="bulkAdd()">批次新增</button></div>
   </div>`;
 }
+function pickRtype(t){
+  adminState.curType = t;
+  ['午餐','飲料','團購'].forEach(x=>{ const b=$('rt_'+x); if(b) b.classList.toggle('on', x===t); });
+}
 async function loadRestItems(){
   const id = adminState.curRest;
   const r = adminState.restaurants.find(x=>x.id===id);
   $('rName').value=r?.name||''; $('rPhone').value=r?.phone||''; $('rNote').value=r?.note||'';
+  pickRtype(r?.rtype||'午餐');
   $('delRestBtn').style.display = r?'inline-flex':'none';
   $('itemsCard').style.display = r?'block':'none';
   if(!r) return;
@@ -641,7 +661,7 @@ async function loadRestItems(){
 async function saveRest(){
   const name=$('rName').value.trim();
   if(!name) return toast('請輸入店名');
-  const row={name,phone:$('rPhone').value.trim()||null,note:$('rNote').value.trim()||null};
+  const row={name,phone:$('rPhone').value.trim()||null,note:$('rNote').value.trim()||null,rtype:adminState.curType||'午餐'};
   let error;
   if(adminState.curRest){ ({error} = await sb.from('restaurants').update(row).eq('id',adminState.curRest)); }
   else {
