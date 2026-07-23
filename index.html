@@ -773,9 +773,15 @@ async function buildSummary(){
     <pre class="line-out" id="lineTxt">${esc(txt)}</pre>
     <div class="center" style="margin-top:10px">
       <button class="btn green" onclick="copyLine()">📋 複製 LINE 文字</button>
+      <button class="btn sm gray" onclick="buildSummary();toast('已更新')">🔄</button>
     </div>
     ${payHtml}`;
   window._lineTxt=txt;
+  clearInterval(window._sumTimer);
+  window._sumTimer = setInterval(()=>{
+    if(adminState.tab==='sum' && location.hash==='#admin') buildSummary();
+    else clearInterval(window._sumTimer);
+  }, 20000);
 }
 async function togglePaid(id,checked){
   const { error } = await sb.from('orders').update({paid:checked}).eq('id',id);
