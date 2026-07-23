@@ -213,7 +213,7 @@ const SUGARS_ALL=['無糖','一分','三分','五分','八分','正常'];
 const ICES=['去冰','微冰','少冰','正常'];
 const sugarLbl = s => s ? (s==='無糖'?'無糖':s+'糖') : '';
 const iceLbl = s => s ? (s==='正常'?'正常冰':s) : '';
-let adminState = { tab:'schedule', restaurants:[], menus:[], curRest:null, curItems:[], sumDate:null };
+let adminState = { tab:'schedule', restaurants:[], menus:[], curRest:null, curItems:[], sumMenuId:null };
 
 /* ══════════════ 路由 ══════════════ */
 window.addEventListener('hashchange', route);
@@ -233,22 +233,33 @@ function renderBrand(){
 async function loadOrderPage(){
   $('view').innerHTML = '<div class="card center">載入中…🍜</div>';
   const today = dstr(taipeiNow());
-  const { data:menus, error } = await sb.from('daily_menus').select('*').gte('menu_date', today).order('menu_date');
-  if(error){ $('view').innerHTML = `<div class="card center">連線失敗，請重新整理 🙏<div class="muted">${esc(error.message)}</div></div>`; return; }
-  const open = (menus||[]).find(isOpen);
-  if(!open){
-    const next = (menus||[])[0];
+  const [mres, rres] = await Promise.all([
+    sb.from('daily_menus').select('*').gte('menu_date', today).order('menu_date'),
+    sb.from('restaurants').select('id,name')
+  ]);
+  if(mres.error){ $('view').innerHTML = `<div class="card center">連線失敗，請重新整理 🙏<div class="muted">${esc(mres.error.message)}</div></div>`; return; }
+  state.restMap = {}; (rres.data||[]).forEach(r=>state.restMap[r.id]=r.name);
+  state.menuList = (mres.data||[]).filter(isOpen);
+  if(state.menuList.length===0){
+    const next = (mres.data||[])[0];
     let msg = next
       ? `<div class="muted" style="margin-top:8px">${mdw(next.menu_date)} 的訂單已結單<br>請等待管理員開放下一次點餐</div>`
       : `<div class="muted" style="margin-top:8px">目前沒有開放中的訂單<br>請等待管理員排菜單</div>`;
     $('view').innerHTML = `<div class="card closed-banner"><div class="big">已 結 單</div>${msg}</div>`;
     return;
   }
+  const keep = state.menuList.find(m=>m.id===state.menu?.id) || state.menuList[0];
+  await selectMenu(keep.id);
+}
+
+async function selectMenu(id){
+  const open = state.menuList.find(m=>m.id===id);
+  if(!open) return;
   state.menu = open; state.cart={}; state.notes={}; state.spicy={}; state.sugar={}; state.ice={}; state.myOrderId=null;
   const [r1,r2,r3] = await Promise.all([
     sb.from('restaurants').select('*').eq('id', open.restaurant_id).single(),
     sb.from('menu_items').select('*').eq('restaurant_id', open.restaurant_id).eq('active',true).order('sort_order'),
-    sb.from('orders').select('*').eq('menu_date', open.menu_date)
+    sb.from('orders').select('*').eq('daily_menu_id', open.id)
   ]);
   state.restaurant = r1.data; state.items = r2.data||[]; state.orders = r3.data||[];
   renderOrderPage();
@@ -262,7 +273,12 @@ function renderOrderPage(){
   const orderedNames = {};
   state.orders.forEach(o=>{ (orderedNames[o.office] ||= []).push(o.customer_name); });
 
-  let html = `
+  let html = '';
+  if(state.menuList.length>1){
+    html += `<div class="tabs" style="margin-bottom:12px">${state.menuList.map(x=>
+      `<div class="tab ${x.id===m.id?'on':''}" onclick="selectMenu('${x.id}')" style="line-height:1.3;padding:8px 4px">${mdw(x.menu_date)}<br><span style="font-size:13px">${esc(state.restMap[x.restaurant_id]||'')}</span></div>`).join('')}</div>`;
+  }
+  html += `
   <div class="card">
     <h2>${esc(mdw(m.menu_date))} 訂：${esc(r?.name||'')}</h2>
     <div class="center" style="margin-bottom:8px"><span class="countdown" id="cd">⏰ 結單：${co.getMonth()+1}/${co.getDate()} ${String(co.getHours()).padStart(2,'0')}:${String(co.getMinutes()).padStart(2,'0')}</span></div>
@@ -391,7 +407,7 @@ function updateCartBar(){
 async function tryLoadMyOrder(){
   if(!state.office||!state.name||!state.menu) return;
   const { data } = await sb.from('orders').select('*')
-    .eq('menu_date',state.menu.menu_date).eq('office',state.office).eq('customer_name',state.name).maybeSingle();
+    .eq('daily_menu_id',state.menu.id).eq('office',state.office).eq('customer_name',state.name).maybeSingle();
   const hint=$('loadedHint');
   if(data){
     state.myOrderId = data.id;
@@ -433,7 +449,7 @@ async function submitOrder(){
       note:(state.notes[id]||'').trim()
     };
   });
-  const row = { menu_date:state.menu.menu_date, office:state.office, customer_name:state.name, items, total:amt, updated_at:new Date().toISOString() };
+  const row = { daily_menu_id:state.menu.id, menu_date:state.menu.menu_date, office:state.office, customer_name:state.name, items, total:amt, updated_at:new Date().toISOString() };
   $('submitBtn').disabled=true;
   const { error } = state.myOrderId
     ? await sb.from('orders').update(row).eq('id',state.myOrderId)
@@ -480,10 +496,10 @@ async function loadAdmin(){
     sb.from('daily_menus').select('*').order('menu_date',{ascending:false}).limit(30)
   ]);
   adminState.restaurants=r1.data||[]; adminState.menus=r2.data||[];
-  if(!adminState.sumDate){
+  if(!adminState.sumMenuId || !adminState.menus.find(m=>m.id===adminState.sumMenuId)){
     const t=dstr(taipeiNow());
     const near = [...adminState.menus].sort((a,b)=>a.menu_date<b.menu_date?-1:1).find(m=>m.menu_date>=t) || adminState.menus[0];
-    adminState.sumDate = near?near.menu_date:t;
+    adminState.sumMenuId = near?near.id:null;
   }
   renderAdmin();
 }
@@ -521,6 +537,7 @@ function admScheduleHtml(){
     <input type="time" id="mCut" value="15:30">
     <label class="f">公告（選填，會顯示給同事）</label>
     <input type="text" id="mAnn" placeholder="例：湯品可備註辣度">
+    <div class="muted" style="margin-top:6px">💡 同一天可以排多個菜單（例如便當、飲料各一），點餐頁會出現切換頁籤</div>
     <div class="center" style="margin-top:12px"><button class="btn" onclick="saveMenu()">發布 / 更新</button></div>
   </div>
   <div class="card">
@@ -540,7 +557,10 @@ function admScheduleHtml(){
 async function saveMenu(){
   const row = { menu_date:$('mDate').value, restaurant_id:$('mRest').value, cutoff_time:$('mCut').value, announcement:$('mAnn').value.trim()||null, is_closed:false };
   if(!row.menu_date||!row.restaurant_id) return toast('請選日期與店家');
-  const { error } = await sb.from('daily_menus').upsert(row,{onConflict:'menu_date'});
+  const exist = adminState.menus.find(m=>m.menu_date===row.menu_date && m.restaurant_id===row.restaurant_id);
+  const { error } = exist
+    ? await sb.from('daily_menus').update(row).eq('id',exist.id)
+    : await sb.from('daily_menus').insert(row);
   if(error) return toast('儲存失敗：'+error.message);
   toast('✅ 菜單已發布');
   loadAdmin();
@@ -552,7 +572,7 @@ async function toggleClose(id,close){
   loadAdmin();
 }
 async function delMenu(id){
-  if(!confirm('刪除這天的菜單？（訂單不會被刪除）')) return;
+  if(!confirm('刪除這個菜單？⚠️ 該菜單的訂單會一併刪除！')) return;
   const { error } = await sb.from('daily_menus').delete().eq('id',id);
   if(error) return toast(error.message);
   loadAdmin();
@@ -654,25 +674,26 @@ async function delItem(id){
 }
 
 /* ── 訂單彙總 ── */
+function rname(id){ const r=adminState.restaurants.find(x=>x.id===id); return r?r.name:'?'; }
 function admSumHtml(){
-  const opts=[...new Set(adminState.menus.map(m=>m.menu_date))].sort().reverse();
+  const opts=[...adminState.menus].sort((a,b)=>a.menu_date<b.menu_date?1:-1);
   return `
   <div class="card">
     <h2>訂單彙總</h2>
-    <label class="f">用餐日期</label>
-    <select id="sumDate" onchange="adminState.sumDate=this.value;buildSummary()">
-      ${opts.map(d=>`<option value="${d}" ${adminState.sumDate===d?'selected':''}>${mdw(d)}</option>`).join('')}
+    <label class="f">選擇菜單</label>
+    <select id="sumMenu" onchange="adminState.sumMenuId=this.value;buildSummary()">
+      ${opts.map(m=>`<option value="${m.id}" ${adminState.sumMenuId===m.id?'selected':''}>${mdw(m.menu_date)} ${esc(rname(m.restaurant_id))}</option>`).join('')}
     </select>
     <div id="sumBody" style="margin-top:12px" class="muted">載入中…</div>
   </div>`;
 }
 async function buildSummary(){
-  const date=adminState.sumDate;
-  const menu=adminState.menus.find(m=>m.menu_date===date);
-  if(!menu){ $('sumBody').innerHTML='這天沒有菜單'; return; }
+  const menu=adminState.menus.find(m=>m.id===adminState.sumMenuId);
+  if(!menu){ $('sumBody').innerHTML='沒有這個菜單'; return; }
+  const date=menu.menu_date;
   const [r1,r2,r3]=await Promise.all([
     sb.from('restaurants').select('*').eq('id',menu.restaurant_id).single(),
-    sb.from('orders').select('*').eq('menu_date',date).order('office').order('created_at'),
+    sb.from('orders').select('*').eq('daily_menu_id',menu.id).order('office').order('created_at'),
     sb.from('menu_items').select('name,sort_order').eq('restaurant_id',menu.restaurant_id)
   ]);
   const rest=r1.data, orders=r2.data||[];
