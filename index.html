@@ -634,20 +634,30 @@ async function buildSummary(){
   const date=adminState.sumDate;
   const menu=adminState.menus.find(m=>m.menu_date===date);
   if(!menu){ $('sumBody').innerHTML='這天沒有菜單'; return; }
-  const [r1,r2]=await Promise.all([
+  const [r1,r2,r3]=await Promise.all([
     sb.from('restaurants').select('*').eq('id',menu.restaurant_id).single(),
-    sb.from('orders').select('*').eq('menu_date',date).order('office').order('created_at')
+    sb.from('orders').select('*').eq('menu_date',date).order('office').order('created_at'),
+    sb.from('menu_items').select('name,sort_order').eq('restaurant_id',menu.restaurant_id)
   ]);
   const rest=r1.data, orders=r2.data||[];
+  const sortMap={}; (r3.data||[]).forEach(mi=>sortMap[mi.name]=mi.sort_order);
   if(orders.length===0){ $('sumBody').innerHTML='這天還沒有任何訂單'; return; }
 
-  // 品項統計
+  // 品項統計：同品項合併，加辣以括號註記（不辣＝正常，不另列）
   const stat={}; let grandQty=0, grandAmt=0;
-  orders.forEach(o=>(o.items||[]).forEach(x=>{ const k=x.name+(x.spicy?`(${x.spicy})`:''); stat[k]=(stat[k]||0)+x.qty; grandQty+=x.qty; grandAmt+=x.qty*x.price; }));
+  orders.forEach(o=>(o.items||[]).forEach(x=>{
+    const s = stat[x.name] ||= {qty:0, spicy:0};
+    s.qty+=x.qty; if(x.spicy==='加辣') s.spicy+=x.qty;
+    grandQty+=x.qty; grandAmt+=x.qty*x.price;
+  }));
+  const statNames = Object.keys(stat).sort((a,b)=>(sortMap[a]??999)-(sortMap[b]??999));
 
   let txt=`📢 ${mdw(date)} 午餐訂單彙總\n🏪 ${rest?.name||''}${rest?.phone?`（${rest.phone}）`:''}\n`;
   txt+=`━━━━━━━━━━\n🍱 品項統計（叫餐用）\n`;
-  for(const n in stat) txt+=`・${n} ×${stat[n]}\n`;
+  for(const n of statNames){
+    const s=stat[n];
+    txt+=`・${n} ×${s.qty}${s.spicy? s.spicy===s.qty?`（都加辣）`:`（${s.spicy}份加辣）` :''}\n`;
+  }
   txt+=`共 ${grandQty} 份\n━━━━━━━━━━\n`;
   for(const off of OFFICES){
     const os=orders.filter(o=>o.office===off);
