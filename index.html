@@ -751,13 +751,36 @@ async function buildSummary(){
   }
   txt+=`━━━━━━━━━━\n💰 總金額：${money(grandAmt)}\n請大家確認自己的餐點，有問題請盡快告知 🙏`;
 
+  const paidCnt = orders.filter(o=>o.paid).length;
+  const paidAmt = orders.filter(o=>o.paid).reduce((s,o)=>s+(o.total||0),0);
+  let payHtml = `<div class="dashed"></div>
+    <div style="font-weight:900;color:var(--red);font-size:17px;margin-bottom:4px">【💰 收款狀態】</div>
+    <div class="muted" style="margin-bottom:6px">已收 ${paidCnt}/${orders.length} 人（${money(paidAmt)}／${money(grandAmt)}）${paidCnt===orders.length?' 🎉全收齊':''}</div>`;
+  for(const off of OFFICES){
+    const os=orders.filter(o=>o.office===off);
+    if(os.length===0) continue;
+    payHtml += `<div style="font-weight:900;margin-top:6px">🏢 ${off}</div>`;
+    os.forEach(o=>{
+      payHtml += `<label class="list-row" style="cursor:pointer">
+        <input type="checkbox" ${o.paid?'checked':''} onchange="togglePaid('${o.id}',this.checked)" style="width:22px;height:22px;accent-color:var(--green)">
+        <div class="grow" style="${o.paid?'color:#8a7550;text-decoration:line-through':''}">${esc(o.customer_name)}　${money(o.total)}</div>
+      </label>`;
+    });
+  }
+
   $('sumBody').innerHTML=`
     <div class="muted">共 ${orders.length} 人／${grandQty} 份／${money(grandAmt)}</div>
     <pre class="line-out" id="lineTxt">${esc(txt)}</pre>
     <div class="center" style="margin-top:10px">
       <button class="btn green" onclick="copyLine()">📋 複製 LINE 文字</button>
-    </div>`;
+    </div>
+    ${payHtml}`;
   window._lineTxt=txt;
+}
+async function togglePaid(id,checked){
+  const { error } = await sb.from('orders').update({paid:checked}).eq('id',id);
+  if(error){ toast('更新失敗：'+error.message); return; }
+  buildSummary();
 }
 async function copyLine(){
   try{ await navigator.clipboard.writeText(window._lineTxt); toast('✅ 已複製，去貼到 LINE 群組吧'); }
