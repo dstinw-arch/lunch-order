@@ -208,7 +208,11 @@ let toastTimer=null;
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2200); }
 
 /* ══════════════ 全域狀態 ══════════════ */
-let state = { menu:null, restaurant:null, items:[], cart:{}, notes:{}, spicy:{}, office:localStorage.getItem('office')||'', name:localStorage.getItem('name')||'', myOrderId:null, orders:[] };
+let state = { menu:null, restaurant:null, items:[], cart:{}, notes:{}, spicy:{}, sugar:{}, ice:{}, office:localStorage.getItem('office')||'', name:localStorage.getItem('name')||'', myOrderId:null, orders:[] };
+const SUGARS_ALL=['無糖','一分','三分','五分','八分','正常'];
+const ICES=['去冰','微冰','少冰','正常'];
+const sugarLbl = s => s ? (s==='無糖'?'無糖':s+'糖') : '';
+const iceLbl = s => s ? (s==='正常'?'正常冰':s) : '';
 let adminState = { tab:'schedule', restaurants:[], menus:[], curRest:null, curItems:[], sumDate:null };
 
 /* ══════════════ 路由 ══════════════ */
@@ -240,7 +244,7 @@ async function loadOrderPage(){
     $('view').innerHTML = `<div class="card closed-banner"><div class="big">已 結 單</div>${msg}</div>`;
     return;
   }
-  state.menu = open; state.cart={}; state.notes={}; state.spicy={}; state.myOrderId=null;
+  state.menu = open; state.cart={}; state.notes={}; state.spicy={}; state.sugar={}; state.ice={}; state.myOrderId=null;
   const [r1,r2,r3] = await Promise.all([
     sb.from('restaurants').select('*').eq('id', open.restaurant_id).single(),
     sb.from('menu_items').select('*').eq('restaurant_id', open.restaurant_id).eq('active',true).order('sort_order'),
@@ -291,14 +295,29 @@ function renderOrderPage(){
           <div class="qty" id="q_${it.id}">${q}</div>
           <button class="plus" onclick="chg('${it.id}',1)">＋</button>
         </div>
-      </div>
-      <div class="item-note" id="n_${it.id}" style="display:${q>0?'block':'none'}">
-        <div class="chips" style="margin-bottom:6px">
+      </div>`;
+      let opts='';
+      if(it.sugar_mode){
+        if(it.sugar_mode==='fixed'){
+          opts += `<div class="muted" style="margin-bottom:4px">🍯 此品項糖度固定，不可調整</div>`;
+        } else {
+          const sugars = it.sugar_mode==='min1' ? SUGARS_ALL.slice(1) : SUGARS_ALL;
+          opts += `<div class="chips" style="margin-bottom:6px">${sugars.map(s=>
+            `<button class="chip sp ${(state.sugar[it.id]||'正常')===s?'on':''}" id="sg_${it.id}_${s}" onclick="setSugar('${it.id}','${s}')">${sugarLbl(s)}</button>`).join('')}</div>`;
+          if(it.sugar_mode==='min1') opts += `<div class="muted" style="margin:-2px 0 4px">⚠️ 此品項最低一分糖</div>`;
+        }
+        opts += `<div class="chips" style="margin-bottom:6px">${ICES.map(s=>
+          `<button class="chip sp ${(state.ice[it.id]||'正常')===s?'on':''}" id="ic_${it.id}_${s}" onclick="setIce('${it.id}','${s}')">${iceLbl(s)}</button>`).join('')}</div>`;
+        opts += `<input type="text" placeholder="備註／加料+10（珍珠、蘆薈、椰果）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">`;
+      } else {
+        opts += `<div class="chips" style="margin-bottom:6px">
           <button class="chip sp ${state.spicy[it.id]==='加辣'?'on':''}" id="spa_${it.id}" onclick="setSpicy('${it.id}','加辣')">🌶 加辣</button>
           <button class="chip sp ${state.spicy[it.id]==='不辣'?'on':''}" id="spb_${it.id}" onclick="setSpicy('${it.id}','不辣')">不辣</button>
         </div>
-        <input type="text" placeholder="備註（例：換溫泉蛋、不要香菜）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">
-      </div>`;
+        <input type="text" placeholder="備註（例：換溫泉蛋、不要香菜）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">`;
+      }
+      html += `
+      <div class="item-note" id="n_${it.id}" style="display:${q>0?'block':'none'}">${opts}</div>`;
     });
   }
   html += `</div>`;
@@ -334,6 +353,14 @@ function startCountdown(){
 
 function pickOffice(o){ state.office=o; localStorage.setItem('office',o); renderOrderPage(); }
 function onName(v){ state.name=v.trim(); localStorage.setItem('name',state.name); clearTimeout(onName.t); onName.t=setTimeout(tryLoadMyOrder,600); }
+function setSugar(id,val){
+  state.sugar[id]=val;
+  document.querySelectorAll(`[id^="sg_${id}_"]`).forEach(b=>b.classList.toggle('on', b.id===`sg_${id}_${val}`));
+}
+function setIce(id,val){
+  state.ice[id]=val;
+  document.querySelectorAll(`[id^="ic_${id}_"]`).forEach(b=>b.classList.toggle('on', b.id===`ic_${id}_${val}`));
+}
 function setSpicy(id,val){
   state.spicy[id] = state.spicy[id]===val ? null : val;
   const a=$('spa_'+id), b=$('spb_'+id);
@@ -368,15 +395,17 @@ async function tryLoadMyOrder(){
   const hint=$('loadedHint');
   if(data){
     state.myOrderId = data.id;
-    state.cart={}; state.notes={}; state.spicy={};
+    state.cart={}; state.notes={}; state.spicy={}; state.sugar={}; state.ice={};
     (data.items||[]).forEach(x=>{ state.cart[x.item_id]=x.qty; if(x.note) state.notes[x.item_id]=x.note; if(x.spicy) state.spicy[x.item_id]=x.spicy; });
     (data.items||[]).forEach(x=>{
       const q=$('q_'+x.item_id), nb=$('n_'+x.item_id);
       if(q){ q.textContent=x.qty; }
-      if(nb){ nb.style.display='block'; nb.querySelector('input').value=x.note||''; }
+      if(nb){ nb.style.display='block'; const inp=nb.querySelector('input[type=text]'); if(inp) inp.value=x.note||''; }
       const a=$('spa_'+x.item_id), b=$('spb_'+x.item_id);
       if(a) a.classList.toggle('on', x.spicy==='加辣');
       if(b) b.classList.toggle('on', x.spicy==='不辣');
+      if(x.sugar) setSugar(x.item_id, x.sugar);
+      if(x.ice) setIce(x.item_id, x.ice);
     });
     if(hint) hint.innerHTML = `<div class="notice" style="margin-top:8px">📋 已載入你先前的訂單，可直接修改後按「更新訂單」<br><button class="btn sm gray" style="margin-top:6px" onclick="cancelMyOrder()">🗑 取消整筆訂單</button></div>`;
     updateCartBar();
@@ -395,7 +424,14 @@ async function submitOrder(){
   if(n===0) return toast('還沒選餐點喔');
   const items = Object.keys(state.cart).map(id=>{
     const it=state.items.find(x=>x.id===id);
-    return { item_id:id, name:it.name, price:it.price, qty:state.cart[id], spicy:state.spicy[id]||'', note:(state.notes[id]||'').trim() };
+    const isDrink = !!it.sugar_mode;
+    return {
+      item_id:id, name:it.name, price:it.price, qty:state.cart[id],
+      spicy: isDrink ? '' : (state.spicy[id]||''),
+      sugar: isDrink ? (it.sugar_mode==='fixed' ? '' : (state.sugar[id]||'正常')) : '',
+      ice:   isDrink ? (state.ice[id]||'正常') : '',
+      note:(state.notes[id]||'').trim()
+    };
   });
   const row = { menu_date:state.menu.menu_date, office:state.office, customer_name:state.name, items, total:amt, updated_at:new Date().toISOString() };
   $('submitBtn').disabled=true;
@@ -643,14 +679,22 @@ async function buildSummary(){
   const sortMap={}; (r3.data||[]).forEach(mi=>sortMap[mi.name]=mi.sort_order);
   if(orders.length===0){ $('sumBody').innerHTML='這天還沒有任何訂單'; return; }
 
-  // 品項統計：同品項合併，加辣以括號註記（不辣＝正常，不另列）
+  // 品項統計：同品項合併，加辣以括號註記（不辣＝正常，不另列）；飲料依糖度/冰量分列
   const stat={}; let grandQty=0, grandAmt=0;
   orders.forEach(o=>(o.items||[]).forEach(x=>{
-    const s = stat[x.name] ||= {qty:0, spicy:0};
+    let key = x.name;
+    if(x.sugar || x.ice){
+      const parts=[sugarLbl(x.sugar), iceLbl(x.ice)].filter(Boolean);
+      key += `〔${parts.join('/')}〕`;
+    }
+    const s = stat[key] ||= {qty:0, spicy:0};
     s.qty+=x.qty; if(x.spicy==='加辣') s.spicy+=x.qty;
     grandQty+=x.qty; grandAmt+=x.qty*x.price;
   }));
-  const statNames = Object.keys(stat).sort((a,b)=>(sortMap[a]??999)-(sortMap[b]??999));
+  const statNames = Object.keys(stat).sort((a,b)=>{
+    const sa=(sortMap[a.split('〔')[0]]??999), sb=(sortMap[b.split('〔')[0]]??999);
+    return sa-sb || (a<b?-1:1);
+  });
 
   let txt=`📢 ${mdw(date)} 午餐訂單彙總\n🏪 ${rest?.name||''}${rest?.phone?`（${rest.phone}）`:''}\n`;
   txt+=`━━━━━━━━━━\n🍱 品項統計（叫餐用）\n`;
@@ -666,7 +710,7 @@ async function buildSummary(){
     txt+=`🏢 ${off}（${money(offAmt)}）\n`;
     os.forEach(o=>{
       const its=(o.items||[]).map(x=>{
-        const tag=[x.spicy,x.note].filter(Boolean).join('、');
+        const tag=[sugarLbl(x.sugar), iceLbl(x.ice), x.spicy, x.note].filter(Boolean).join('、');
         return `${x.name}×${x.qty}${tag?`〔${tag}〕`:''}`;
       }).join('、');
       txt+=`・${o.customer_name}：${its} ${money(o.total)}\n`;
