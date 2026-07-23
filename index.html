@@ -195,9 +195,9 @@ const WD = ['日','一','二','三','四','五','六'];
 function taipeiNow(){ return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Taipei'})); }
 function dstr(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function mdw(dateStr){ const d=new Date(dateStr+'T00:00:00'); return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})`; }
-function cutoffOf(menu){  // 結單時間＝用餐日「前一天」的 cutoff_time（台灣時間）
+function cutoffOf(menu){  // 結單時間：預設用餐日「前一天」，cutoff_same_day 則為用餐「當天」
   const d = new Date(menu.menu_date+'T00:00:00');
-  d.setDate(d.getDate()-1);
+  if(!menu.cutoff_same_day) d.setDate(d.getDate()-1);
   const [h,m] = (menu.cutoff_time||'15:30').slice(0,5).split(':');
   d.setHours(+h,+m,0,0);
   return d;
@@ -516,6 +516,7 @@ function renderAdmin(){
   if(adminState.tab==='sum') html+=admSumHtml();
   html += `<div class="center" style="margin-top:4px"><a class="adminlink" href="#" onclick="location.hash='';return false">← 回點餐頁</a></div>`;
   $('view').innerHTML=html;
+  if(adminState.tab==='schedule') pickCutDay(!!adminState.cutSameDay);
   if(adminState.tab==='rest' && adminState.curRest) loadRestItems();
   if(adminState.tab==='sum') buildSummary();
 }
@@ -533,7 +534,11 @@ function admScheduleHtml(){
     <input type="date" id="mDate" value="${dstr(tmr)}">
     <label class="f">店家</label>
     <select id="mRest">${adminState.restaurants.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>
-    <label class="f">結單時間（用餐日<b style="color:var(--red)">前一天</b>的這個時間）</label>
+    <label class="f">結單時間</label>
+    <div class="chips" style="margin-bottom:8px">
+      <button class="chip" id="cdPrev" onclick="pickCutDay(false)">用餐前一天（便當）</button>
+      <button class="chip" id="cdSame" onclick="pickCutDay(true)">用餐當天（飲料）</button>
+    </div>
     <input type="time" id="mCut" value="15:30">
     <label class="f">公告（選填，會顯示給同事）</label>
     <input type="text" id="mAnn" placeholder="例：湯品可備註辣度">
@@ -547,15 +552,21 @@ function admScheduleHtml(){
       const r=adminState.restaurants.find(x=>x.id===m.restaurant_id);
       const st = m.is_closed?'🔒已結單':(isOpen(m)?'🟢開放中':'⏰已過結單時間');
       return `<div class="list-row">
-        <div class="grow"><b>${mdw(m.menu_date)}</b> ${esc(r?.name||'?')}<br><span class="muted">${st}｜結單 ${(m.cutoff_time||'').slice(0,5)}</span></div>
+        <div class="grow"><b>${mdw(m.menu_date)}</b> ${esc(r?.name||'?')}<br><span class="muted">${st}｜${m.cutoff_same_day?'當天':'前一天'} ${(m.cutoff_time||'').slice(0,5)} 結單</span></div>
         <button class="btn sm gray" onclick="toggleClose('${m.id}',${!m.is_closed})">${m.is_closed?'重新開放':'提前結單'}</button>
         <button class="btn sm gray" onclick="delMenu('${m.id}')">刪除</button>
       </div>`;
     }).join('')}
   </div>`;
 }
+function pickCutDay(same){
+  adminState.cutSameDay = same;
+  const p=$('cdPrev'), s=$('cdSame');
+  if(p) p.classList.toggle('on', !same);
+  if(s) s.classList.toggle('on', same);
+}
 async function saveMenu(){
-  const row = { menu_date:$('mDate').value, restaurant_id:$('mRest').value, cutoff_time:$('mCut').value, announcement:$('mAnn').value.trim()||null, is_closed:false };
+  const row = { menu_date:$('mDate').value, restaurant_id:$('mRest').value, cutoff_time:$('mCut').value, cutoff_same_day:!!adminState.cutSameDay, announcement:$('mAnn').value.trim()||null, is_closed:false };
   if(!row.menu_date||!row.restaurant_id) return toast('請選日期與店家');
   const exist = adminState.menus.find(m=>m.menu_date===row.menu_date && m.restaurant_id===row.restaurant_id);
   const { error } = exist
