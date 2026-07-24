@@ -531,7 +531,10 @@ function admTab(t){ adminState.tab=t; renderAdmin(); }
 function admScheduleHtml(){
   const tmr = new Date(taipeiNow()); tmr.setDate(tmr.getDate()+1);
   const today = dstr(taipeiNow());
-  const upcoming = adminState.menus.filter(m=>m.menu_date>=today).sort((a,b)=>a.menu_date<b.menu_date?-1:1);
+  const showAll = !!adminState.showAllMenus;
+  const upcoming = showAll
+    ? [...adminState.menus].sort((a,b)=>a.menu_date<b.menu_date?1:-1)
+    : adminState.menus.filter(m=>m.menu_date>=today).sort((a,b)=>a.menu_date<b.menu_date?-1:1);
   return `
   <div class="card">
     <h2>排每日菜單</h2>
@@ -554,15 +557,19 @@ function admScheduleHtml(){
     <div class="center" style="margin-top:12px"><button class="btn" onclick="saveMenu()">發布 / 更新</button></div>
   </div>
   <div class="card">
-    <h2>近期菜單</h2>
+    <h2>${showAll?'全部菜單':'近期菜單'}</h2>
+    <div class="center" style="margin-bottom:6px">
+      <button class="btn sm gray" onclick="adminState.showAllMenus=${showAll?'false':'true'};renderAdmin()">${showAll?'只看近期':'顯示全部（含過期）'}</button>
+    </div>
     ${upcoming.length===0?'<div class="muted">尚未排任何菜單</div>':''}
     ${upcoming.map(m=>{
       const r=adminState.restaurants.find(x=>x.id===m.restaurant_id);
       const st = m.is_closed?'🔒已結單':(isOpen(m)?'🟢開放中':'⏰已過結單時間');
-      return `<div class="list-row">
-        <div class="grow"><b>${mdw(m.menu_date)}</b> ${esc(r?.name||'?')}<br><span class="muted">${st}｜${m.cutoff_same_day?'當天':'前一天'} ${(m.cutoff_time||'').slice(0,5)} 結單</span></div>
+      return `<div class="list-row" style="flex-wrap:wrap">
+        <div class="grow" style="min-width:180px"><b>${mdw(m.menu_date)}</b> ${esc(r?.name||'?')}<br><span class="muted">${st}｜${m.cutoff_same_day?'當天':'前一天'} ${(m.cutoff_time||'').slice(0,5)} 結單${m.announcement?`｜📢 ${esc(m.announcement)}`:''}</span></div>
+        <button class="btn sm gray" onclick="editMenu('${m.id}')">✏️ 編輯</button>
         <button class="btn sm gray" onclick="toggleClose('${m.id}',${!m.is_closed})">${m.is_closed?'重新開放':'提前結單'}</button>
-        <button class="btn sm gray" onclick="delMenu('${m.id}')">刪除</button>
+        <button class="btn sm gray" onclick="delMenu('${m.id}')">🗑 刪除</button>
       </div>`;
     }).join('')}
   </div>`;
@@ -590,10 +597,25 @@ async function toggleClose(id,close){
   toast(close?'已結單':'已重新開放');
   loadAdmin();
 }
+function editMenu(id){
+  const m=adminState.menus.find(x=>x.id===id);
+  if(!m) return toast('找不到這張單');
+  $('mDate').value = m.menu_date;
+  $('mRest').value = m.restaurant_id;
+  $('mCut').value  = (m.cutoff_time||'').slice(0,5);
+  $('mAnn').value  = m.announcement||'';
+  pickCutDay(!!m.cutoff_same_day);
+  window.scrollTo({top:0,behavior:'smooth'});
+  toast('已載入，改完按「發布 / 更新」');
+}
 async function delMenu(id){
-  if(!confirm('刪除這個菜單？⚠️ 該菜單的訂單會一併刪除！')) return;
+  const m=adminState.menus.find(x=>x.id===id);
+  const label = m ? `${mdw(m.menu_date)} ${rname(m.restaurant_id)}` : '這張單';
+  const { count } = await sb.from('orders').select('id',{count:'exact',head:true}).eq('daily_menu_id',id);
+  if(!confirm(`刪除「${label}」？\n⚠️ 底下 ${count||0} 筆訂單會一起刪除，無法復原。`)) return;
   const { error } = await sb.from('daily_menus').delete().eq('id',id);
   if(error) return toast(error.message);
+  toast('🗑 已刪除');
   loadAdmin();
 }
 
@@ -781,10 +803,13 @@ async function buildSummary(){
     if(os.length===0) continue;
     payHtml += `<div style="font-weight:900;margin-top:6px">🏢 ${off}</div>`;
     os.forEach(o=>{
-      payHtml += `<label class="list-row" style="cursor:pointer">
-        <input type="checkbox" ${o.paid?'checked':''} onchange="togglePaid('${o.id}',this.checked)" style="width:22px;height:22px;accent-color:var(--green)">
-        <div class="grow" style="${o.paid?'color:#8a7550;text-decoration:line-through':''}">${esc(o.customer_name)}　${money(o.total)}</div>
-      </label>`;
+      payHtml += `<div class="list-row">
+        <label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer">
+          <input type="checkbox" ${o.paid?'checked':''} onchange="togglePaid('${o.id}',this.checked)" style="width:22px;height:22px;accent-color:var(--green)">
+          <span style="flex:1;${o.paid?'color:#8a7550;text-decoration:line-through':''}">${esc(o.customer_name)}　${money(o.total)}</span>
+        </label>
+        <button class="btn sm gray" onclick="delOrder('${o.id}')">✕</button>
+      </div>`;
     });
   }
 
@@ -797,11 +822,21 @@ async function buildSummary(){
     </div>
     ${payHtml}`;
   window._lineTxt=txt;
+  window._sumOrders=orders;
   clearInterval(window._sumTimer);
   window._sumTimer = setInterval(()=>{
     if(adminState.tab==='sum' && location.hash==='#admin') buildSummary();
     else clearInterval(window._sumTimer);
   }, 20000);
+}
+async function delOrder(id){
+  const o=(window._sumOrders||[]).find(x=>x.id===id);
+  const who = o ? `${o.customer_name}（${o.office}）　${money(o.total)}` : '這筆';
+  if(!confirm(`刪除「${who}」的訂單？\n無法復原。`)) return;
+  const { error } = await sb.from('orders').delete().eq('id',id);
+  if(error) return toast('刪除失敗：'+error.message);
+  toast('🗑 已刪除');
+  buildSummary();
 }
 async function togglePaid(id,checked){
   const { error } = await sb.from('orders').update({paid:checked}).eq('id',id);
