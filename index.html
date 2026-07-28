@@ -761,8 +761,9 @@ async function buildSummary(){
       const parts=[sugarLbl(x.sugar), iceLbl(x.ice)].filter(Boolean);
       key += `〔${parts.join('/')}〕`;
     }
-    const s = stat[key] ||= {qty:0, spicy:0};
+    const s = stat[key] ||= {qty:0, spicy:0, notes:{}};
     s.qty+=x.qty; if(x.spicy==='加辣') s.spicy+=x.qty;
+    const nt=(x.note||'').trim(); if(nt) s.notes[nt]=(s.notes[nt]||0)+x.qty;
     grandQty+=x.qty; grandAmt+=x.qty*x.price;
   }));
   const statNames = Object.keys(stat).sort((a,b)=>{
@@ -774,7 +775,10 @@ async function buildSummary(){
   txt+=`━━━━━━━━━━\n🍱 品項統計（叫餐用）\n`;
   for(const n of statNames){
     const s=stat[n];
-    txt+=`・${n} ×${s.qty}${s.spicy? s.spicy===s.qty?`（都加辣）`:`（${s.spicy}份加辣）` :''}\n`;
+    const ann=[];
+    if(s.spicy) ann.push(s.spicy===s.qty?'都加辣':`${s.spicy}份加辣`);
+    Object.entries(s.notes).sort((a,b)=>b[1]-a[1]).forEach(([nt,c])=>ann.push(`${nt}×${c}`));
+    txt+=`・${n} ×${s.qty}${ann.length?`（${ann.join('、')}）`:''}\n`;
   }
   txt+=`共 ${grandQty} 份\n━━━━━━━━━━\n`;
   for(const off of OFFICES){
