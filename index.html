@@ -208,7 +208,7 @@ let toastTimer=null;
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2200); }
 
 /* ══════════════ 全域狀態 ══════════════ */
-let state = { menu:null, restaurant:null, items:[], cart:{}, notes:{}, spicy:{}, sugar:{}, ice:{}, office:localStorage.getItem('office')||'', name:localStorage.getItem('name')||'', myOrderId:null, orders:[] };
+let state = { menu:null, restaurant:null, items:[], cart:{}, notes:{}, spicy:{}, sugar:{}, ice:{}, pokeSel:{}, office:localStorage.getItem('office')||'', name:localStorage.getItem('name')||'', myOrderId:null, orders:[] };
 const SUGARS_ALL=['無糖','一分','三分','五分','八分','正常'];
 const ICES=['去冰','微冰','少冰','正常'];
 const sugarLbl = s => s ? (s==='無糖'?'無糖':s+'糖') : '';
@@ -255,7 +255,7 @@ async function loadOrderPage(){
 async function selectMenu(id){
   const open = state.menuList.find(m=>m.id===id);
   if(!open) return;
-  state.menu = open; state.cart={}; state.notes={}; state.spicy={}; state.sugar={}; state.ice={}; state.myOrderId=null;
+  state.menu = open; state.cart={}; state.notes={}; state.spicy={}; state.sugar={}; state.ice={}; state.pokeSel={}; state.myOrderId=null;
   const [r1,r2,r3] = await Promise.all([
     sb.from('restaurants').select('*').eq('id', open.restaurant_id).single(),
     sb.from('menu_items').select('*').eq('restaurant_id', open.restaurant_id).eq('active',true).order('sort_order'),
@@ -304,6 +304,7 @@ function renderOrderPage(){
   for(const cat in groups){
     html += `<div class="cat-title">${esc(cat)}</div>`;
     groups[cat].forEach(it=>{
+      if(it.sugar_mode==='poke'){ html += pokeCardHtml(it); return; }
       const q = state.cart[it.id]||0;
       html += `
       <div class="item">
@@ -395,11 +396,75 @@ function chg(id,d){
   $('n_'+id).style.display = q>0?'block':'none';
   updateCartBar();
 }
+/* ══════════════ 自選波奇組合器 ══════════════ */
+const POKE = {
+  base: 100,
+  groups: [
+    { key:'base',    label:'① 基底（選 1）',            min:1, max:1, type:'single',
+      opts:[['生菜',0],['藜麥飯',0],['紫米飯',0],['藜麥飯菜各半',0],['紫米飯菜各半',0],['藜麥飯一半',0],['紫米飯一半',0],['不飯不菜',0]] },
+    { key:'veg',     label:'② 配料（選 1–5）',          min:1, max:5, type:'multi',
+      opts:[['毛豆',0],['玉米',0],['豆腐',0],['水煮蛋',0],['小黃瓜',0],['季節時蔬(蘋果)',0],['菠菜',0],['黑豆',0],['花椰菜',0],['秋葵',0],['泡菜(小辣)',0],['玉米筍',0],['地瓜泥',0],['紫洋蔥',0]] },
+    { key:'protein', label:'③ 蛋白質加購（選 0–5，另計價）', min:0, max:5, type:'multi',
+      opts:[['雞胸肉50克',40],['雞胸肉100克',70],['胡椒牛50克',50],['胡椒牛100克',95],['蝦蝦5隻',70],['鮭魚(生)50克',90],['鮭魚(炙燒)50克',90],['鮪魚(生)50克',80],['鮪魚(炙燒)50克',80]] },
+    { key:'sauce',   label:'④ 醬汁（選 1）',            min:1, max:1, type:'single',
+      opts:[['柚子油醋',0],['哇沙米油醋',0],['塔塔醬',0],['胡麻醬',0],['蜂蜜芥末',0],['是拉差美乃滋(小辣)',0],['特製辣美乃滋(全素中辣)',0],['水果優格',0],['不醬',0]] },
+    { key:'topping', label:'⑤ 撒料（選 1–2）',          min:1, max:2, type:'multi',
+      opts:[['七味粉',0],['鰹魚香鬆',0],['堅果',0],['玉米片',0],['蒜酥',0],['海苔絲',0],['黑芝麻',0],['不要撒料',0]] }
+  ]
+};
+const pokeG = k => POKE.groups.find(g=>g.key===k);
+function pokeInit(id){ if(!state.pokeSel[id]) state.pokeSel[id]={base:'',veg:[],protein:[],sauce:'',topping:[]}; return state.pokeSel[id]; }
+function pokeAdd(id){ const s=pokeInit(id); let a=0; const g=pokeG('protein'); s.protein.forEach(n=>{const o=g.opts.find(o=>o[0]===n); if(o)a+=o[1];}); return a; }
+function pokePrice(it){ return POKE.base + pokeAdd(it.id); }
+function pokeValid(id){ const s=pokeInit(id); return !!(s.base && s.veg.length>=1 && s.sauce && s.topping.length>=1); }
+function pokeNote(id){ const s=pokeInit(id); const p=[];
+  p.push('基底:'+(s.base||'—'));
+  p.push('配料:'+(s.veg.join('、')||'—'));
+  if(s.protein.length) p.push('蛋白質:'+s.protein.join('、'));
+  p.push('醬:'+(s.sauce||'—'));
+  p.push('撒料:'+(s.topping.join('、')||'—'));
+  return p.join('｜');
+}
+function pokePick(id,key,name){
+  const g=pokeG(key), s=pokeInit(id);
+  if(g.type==='single'){ s[key] = (s[key]===name?'':name); }
+  else {
+    const arr=s[key], i=arr.indexOf(name);
+    if(i>=0) arr.splice(i,1);
+    else { if(arr.length>=g.max){ toast('最多選 '+g.max+' 項'); return; } arr.push(name); }
+  }
+  if(pokeValid(id)) state.cart[id]=1; else delete state.cart[id];
+  pokeRerender(id); updateCartBar();
+}
+function pokeGroupsHtml(id){
+  const s=pokeInit(id); let h='';
+  POKE.groups.forEach(g=>{
+    const sel = g.type==='single' ? (s[g.key]?[s[g.key]]:[]) : s[g.key];
+    h+=`<div style="margin:12px 0 5px;font-weight:600">${esc(g.label)}`+
+       (g.type==='multi'?` <span class="muted" style="font-weight:400">已選 ${sel.length}/${g.max}</span>`:'')+`</div>`;
+    h+=`<div class="chips">`+g.opts.map(o=>{
+        const on=sel.includes(o[0]); const add=o[1]?` +$${o[1]}`:'';
+        return `<button class="chip sp ${on?'on':''}" onclick="pokePick('${id}','${g.key}','${o[0].replace(/'/g,"\\'")}')">${esc(o[0])}${add}</button>`;
+      }).join('')+`</div>`;
+  });
+  const price=POKE.base+pokeAdd(id), ok=pokeValid(id);
+  h+=`<div class="notice" style="margin-top:12px">小計 <b>$${price}</b>　`+
+     (ok?'✅ 已選完，可送出':'⚠️ 基底 / 配料 / 醬汁 / 撒料為必選')+`</div>`;
+  return h;
+}
+function pokeCardHtml(it){
+  return `<div class="item" style="display:block">
+    <div class="nm">${esc(it.name)} <span class="muted">$${POKE.base} 起</span></div>
+    <div id="poke_${it.id}">${pokeGroupsHtml(it.id)}</div>
+  </div>`;
+}
+function pokeRerender(id){ const el=$('poke_'+id); if(el) el.innerHTML=pokeGroupsHtml(id); }
+
 function cartTotal(){
   let n=0,amt=0;
   for(const id in state.cart){
     const it = state.items.find(x=>x.id===id); if(!it) continue;
-    n += state.cart[id]; amt += state.cart[id]*it.price;
+    n += state.cart[id]; amt += state.cart[id]*(it.sugar_mode==='poke'?pokePrice(it):it.price);
   }
   return {n,amt};
 }
@@ -416,9 +481,10 @@ async function tryLoadMyOrder(){
   const hint=$('loadedHint');
   if(data){
     state.myOrderId = data.id;
-    state.cart={}; state.notes={}; state.spicy={}; state.sugar={}; state.ice={};
-    (data.items||[]).forEach(x=>{ state.cart[x.item_id]=x.qty; if(x.note) state.notes[x.item_id]=x.note; if(x.spicy) state.spicy[x.item_id]=x.spicy; });
+    state.cart={}; state.notes={}; state.spicy={}; state.sugar={}; state.ice={}; state.pokeSel={};
+    (data.items||[]).forEach(x=>{ state.cart[x.item_id]=x.qty; if(x.note) state.notes[x.item_id]=x.note; if(x.spicy) state.spicy[x.item_id]=x.spicy; if(x.poke) state.pokeSel[x.item_id]=x.poke; });
     (data.items||[]).forEach(x=>{
+      if(x.poke){ pokeRerender(x.item_id); return; }
       const q=$('q_'+x.item_id), nb=$('n_'+x.item_id);
       if(q){ q.textContent=x.qty; }
       if(nb){ nb.style.display='block'; const inp=nb.querySelector('input[type=text]'); if(inp) inp.value=x.note||''; }
@@ -443,8 +509,14 @@ async function submitOrder(){
   if(!state.name) return toast('請先輸入姓名');
   const {n,amt}=cartTotal();
   if(n===0) return toast('還沒選餐點喔');
+  for(const id in state.cart){ const it=state.items.find(x=>x.id===id);
+    if(it && it.sugar_mode==='poke' && !pokeValid(id)) return toast('自選波奇尚未選完（基底/配料/醬汁/撒料為必選）'); }
   const items = Object.keys(state.cart).map(id=>{
     const it=state.items.find(x=>x.id===id);
+    if(it.sugar_mode==='poke'){
+      return { item_id:id, name:it.name, price:pokePrice(it), qty:state.cart[id],
+        spicy:'', sugar:'', ice:'', note:pokeNote(id), poke:state.pokeSel[id] };
+    }
     const noteOnly = it.sugar_mode==='noteonly';
     const isDrink = !!it.sugar_mode && !noteOnly;
     return {
