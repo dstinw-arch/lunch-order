@@ -316,7 +316,7 @@ function renderOrderPage(){
         </div>
       </div>`;
       let opts='';
-      if(it.sugar_mode){
+      if(it.sugar_mode && it.sugar_mode!=='noteonly'){
         if(it.sugar_mode==='fixed'){
           opts += `<div class="muted" style="margin-bottom:4px">🍯 此品項糖度固定，不可調整</div>`;
         } else {
@@ -328,7 +328,7 @@ function renderOrderPage(){
         opts += `<div class="chips" style="margin-bottom:6px">${ICES.map(s=>
           `<button class="chip sp ${(state.ice[it.id]||'正常')===s?'on':''}" id="ic_${it.id}_${s}" onclick="setIce('${it.id}','${s}')">${iceLbl(s)}</button>`).join('')}</div>`;
         opts += `<input type="text" placeholder="備註／加料+10（珍珠、蘆薈、椰果）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">`;
-      } else if((state.restaurant?.rtype)==='團購'){
+      } else if((state.restaurant?.rtype)==='團購' || it.sugar_mode==='noteonly'){
         opts += `<input type="text" placeholder="備註（選填）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">`;
       } else {
         opts += `<div class="chips" style="margin-bottom:6px">
@@ -445,10 +445,11 @@ async function submitOrder(){
   if(n===0) return toast('還沒選餐點喔');
   const items = Object.keys(state.cart).map(id=>{
     const it=state.items.find(x=>x.id===id);
-    const isDrink = !!it.sugar_mode;
+    const noteOnly = it.sugar_mode==='noteonly';
+    const isDrink = !!it.sugar_mode && !noteOnly;
     return {
       item_id:id, name:it.name, price:it.price, qty:state.cart[id],
-      spicy: isDrink ? '' : (state.spicy[id]||''),
+      spicy: (isDrink||noteOnly) ? '' : (state.spicy[id]||''),
       sugar: isDrink ? (it.sugar_mode==='fixed' ? '' : (state.sugar[id]||'正常')) : '',
       ice:   isDrink ? (state.ice[id]||'正常') : '',
       note:(state.notes[id]||'').trim()
