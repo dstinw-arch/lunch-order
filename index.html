@@ -834,32 +834,36 @@ async function buildSummary(){
   const sortMap={}; (r3.data||[]).forEach(mi=>sortMap[mi.name]=mi.sort_order);
   if(orders.length===0){ $('sumBody').innerHTML='這天還沒有任何訂單'; return; }
 
-  // 品項統計：同品項合併，加辣以括號註記（不辣＝正常，不另列）；飲料依糖度/冰量分列
+  // 品項統計：依「品項＋每筆數量」分組，顯示各數量出現幾筆（叫餐用）；
+  // 每筆數量=1 維持「品名 ×人數」；數量>1 展開為「品名×數量（N份）」。加辣/備註以括號註記；飲料依糖度/冰量分列
   const stat={}; let grandQty=0, grandAmt=0;
   orders.forEach(o=>(o.items||[]).forEach(x=>{
-    let key = x.name;
+    let base = x.name;
     if(x.sugar || x.ice){
       const parts=[sugarLbl(x.sugar), iceLbl(x.ice)].filter(Boolean);
-      key += `〔${parts.join('/')}〕`;
+      base += `〔${parts.join('/')}〕`;
     }
-    const s = stat[key] ||= {qty:0, spicy:0, notes:{}};
-    s.qty+=x.qty; if(x.spicy==='加辣') s.spicy+=x.qty;
-    const nt=(x.note||'').trim(); if(nt) s.notes[nt]=(s.notes[nt]||0)+x.qty;
+    const key = base + '\u001F' + x.qty;
+    const s = stat[key] ||= {base, qty:x.qty, count:0, spicy:0, notes:{}};
+    s.count += 1; if(x.spicy==='加辣') s.spicy += 1;
+    const nt=(x.note||'').trim(); if(nt) s.notes[nt]=(s.notes[nt]||0)+1;
     grandQty+=x.qty; grandAmt+=x.qty*x.price;
   }));
-  const statNames = Object.keys(stat).sort((a,b)=>{
-    const sa=(sortMap[a.split('〔')[0]]??999), sb=(sortMap[b.split('〔')[0]]??999);
-    return sa-sb || (a<b?-1:1);
+  const statKeys = Object.keys(stat).sort((a,b)=>{
+    const A=stat[a], B=stat[b];
+    const sa=(sortMap[A.base.split('〔')[0]]??999), sbb=(sortMap[B.base.split('〔')[0]]??999);
+    return sa-sbb || (A.base<B.base?-1:A.base>B.base?1:0) || (B.qty-A.qty);
   });
 
   let txt=`📢 ${mdw(date)} 午餐訂單彙總\n🏪 ${rest?.name||''}${rest?.phone?`（${rest.phone}）`:''}\n`;
   txt+=`━━━━━━━━━━\n🍱 品項統計（叫餐用）\n`;
-  for(const n of statNames){
-    const s=stat[n];
+  for(const k of statKeys){
+    const s=stat[k];
     const ann=[];
-    if(s.spicy) ann.push(s.spicy===s.qty?'都加辣':`${s.spicy}份加辣`);
+    if(s.spicy) ann.push(s.spicy===s.count?'都加辣':`${s.spicy}份加辣`);
     Object.entries(s.notes).sort((a,b)=>b[1]-a[1]).forEach(([nt,c])=>ann.push(`${nt}×${c}`));
-    txt+=`・${n} ×${s.qty}${ann.length?`（${ann.join('、')}）`:''}\n`;
+    const head = s.qty===1 ? `${s.base} ×${s.count}` : `${s.base}×${s.qty}（${s.count}份）`;
+    txt+=`・${head}${ann.length?`（${ann.join('、')}）`:''}\n`;
   }
   txt+=`共 ${grandQty} 份\n━━━━━━━━━━\n`;
   for(const off of OFFICES){
