@@ -169,6 +169,16 @@ pre.line-out{
   .footcat{animation:bob 2.4s ease-in-out infinite}
   @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
 }
+
+/* ── 投票 ── */
+.vote-opt{border:2px solid var(--ink);border-radius:10px;padding:8px 10px;margin:8px 0;background:#fff;cursor:pointer}
+.vote-opt.mine{background:var(--cream);border-color:var(--red)}
+.vote-top{display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:900;font-size:15.5px}
+.vote-top .cnt{color:var(--red);white-space:nowrap}
+.vote-bar{height:8px;background:#eee;border-radius:999px;margin:6px 0 4px;overflow:hidden}
+.vote-bar>i{display:block;height:100%;background:var(--yellow-deep)}
+.voters{font-size:13px;color:#8a7550;line-height:1.7}
+.voters b{color:var(--red)}
 </style>
 </head>
 <body>
@@ -241,19 +251,23 @@ function renderBrand(){
 async function loadOrderPage(){
   $('view').innerHTML = '<div class="card center">載入中…🍜</div>';
   const today = dstr(taipeiNow());
-  const [mres, rres] = await Promise.all([
+  const [mres, rres, pres] = await Promise.all([
     sb.from('daily_menus').select('*').gte('menu_date', today).order('menu_date'),
-    sb.from('restaurants').select('id,name,rtype')
+    sb.from('restaurants').select('id,name,rtype'),
+    sb.from('polls').select('*').eq('status','open').gte('vote_date', today).order('vote_date')
   ]);
   if(mres.error){ $('view').innerHTML = `<div class="card center">連線失敗，請重新整理 🙏<div class="muted">${esc(mres.error.message)}</div></div>`; return; }
   state.restMap = {}; (rres.data||[]).forEach(r=>state.restMap[r.id]=r);
+  state.polls = pres.data||[];
+  await loadPollDetails();
   state.menuList = (mres.data||[]).filter(isOpen);
   if(state.menuList.length===0){
     const next = (mres.data||[])[0];
     let msg = next
       ? `<div class="muted" style="margin-top:8px">${mdw(next.menu_date)} 的訂單已結單<br>請等待管理員開放下一次點餐</div>`
       : `<div class="muted" style="margin-top:8px">目前沒有開放中的訂單<br>請等待管理員排菜單</div>`;
-    $('view').innerHTML = `<div class="card closed-banner"><div class="big">已 結 單</div>${msg}</div>`;
+    $('view').innerHTML = pollsSectionHtml() + `<div class="card closed-banner"><div class="big">已 結 單</div>${msg}</div>`;
+    startPollTimer();
     return;
   }
   const keep = state.menuList.find(m=>m.id===state.menu?.id) || state.menuList[0];
@@ -281,7 +295,7 @@ function renderOrderPage(){
   const orderedNames = {};
   state.orders.forEach(o=>{ (orderedNames[o.office] ||= []).push(o.customer_name); });
 
-  let html = '';
+  let html = pollsSectionHtml();
   if(state.menuList.length>1){
     const em = t => t==='飲料'?'🥤':t==='團購'?'📦':'🍱';
     html += `<div class="tabs" style="margin-bottom:12px">${state.menuList.map(x=>{
@@ -366,6 +380,7 @@ function renderOrderPage(){
   updateCartBar();
   tryLoadMyOrder();
   startCountdown();
+  startPollTimer();
 }
 
 let cdTimer=null;
@@ -558,6 +573,87 @@ async function cancelMyOrder(){
   loadOrderPage();
 }
 
+/* ══════════════ 投票（前台） ══════════════ */
+async function loadPollDetails(){
+  state.pollOpts={}; state.pollVotes={};
+  const ids=(state.polls||[]).map(p=>p.id);
+  if(!ids.length) return;
+  const [o,v]=await Promise.all([
+    sb.from('poll_options').select('*').in('poll_id',ids).order('sort_order'),
+    sb.from('votes').select('*').in('poll_id',ids)
+  ]);
+  (o.data||[]).forEach(x=>(state.pollOpts[x.poll_id] ||= []).push(x));
+  (v.data||[]).forEach(x=>(state.pollVotes[x.poll_id] ||= []).push(x));
+}
+function pollsSectionHtml(){ return `<div id="pollsBox">${pollsInnerHtml()}</div>`; }
+function myVote(pid){ return (state.pollVotes[pid]||[]).find(v=>v.office===state.office && v.voter_name===state.name); }
+function pollsInnerHtml(){
+  if(!state.polls || state.polls.length===0) return '';
+  const idRow = `
+    <div class="chips" style="margin-bottom:6px">${OFFICES.map(o=>`<button class="chip sp ${state.office===o?'on':''}" onclick="voteOffice('${o}')">${o}</button>`).join('')}</div>
+    <input type="text" id="voteName" placeholder="你的姓名（實名投票）" value="${esc(state.name)}" oninput="voteName(this.value)" style="margin-bottom:4px">
+    <div class="muted" style="margin-bottom:6px">👆 點候選即投票，再點一次收回。姓名大家都看得到。</div>`;
+  const polls = state.polls.map(p=>{
+    const opts=[...(state.pollOpts[p.id]||[])];
+    const votes=state.pollVotes[p.id]||[];
+    const cnt={}; votes.forEach(v=>cnt[v.option_id]=(cnt[v.option_id]||0)+1);
+    const max=Math.max(1,...opts.map(o=>cnt[o.id]||0));
+    const mine=myVote(p.id);
+    opts.sort((a,b)=>(cnt[b.id]||0)-(cnt[a.id]||0) || a.sort_order-b.sort_order);
+    const rows=opts.map(o=>{
+      const c=cnt[o.id]||0, isMine=mine&&mine.option_id===o.id;
+      const voters=votes.filter(v=>v.option_id===o.id)
+        .map(v=>{const self=v.office===state.office&&v.voter_name===state.name; const t=`${esc(v.office)}·${esc(v.voter_name)}`; return self?`<b>${t}</b>`:t;}).join('、');
+      return `<div class="vote-opt ${isMine?'mine':''}" onclick="castVote('${p.id}','${o.id}')">
+        <div class="vote-top"><span>${esc(o.label)}${isMine?' ✓':''}</span><span class="cnt">${c} 票</span></div>
+        <div class="vote-bar"><i style="width:${Math.round(c/max*100)}%"></i></div>
+        ${c?`<div class="voters">${voters}</div>`:''}
+      </div>`;
+    }).join('');
+    const chosen = mine ? (opts.find(o=>o.id===mine.option_id)||{}).label : '';
+    return `<div style="margin-top:10px">
+      <div style="font-weight:900;color:var(--red);font-size:17px">${esc(p.title || (mdw(p.vote_date)+' 吃哪家？'))}</div>
+      <div class="muted" style="margin-bottom:4px">🗳 ${mdw(p.vote_date)}・共 ${votes.length} 票・${mine?'你投了：'+esc(chosen):'尚未投票'}</div>
+      ${rows}
+    </div>`;
+  }).join('<div class="dashed"></div>');
+  return `<div class="card"><h2>投票決定</h2>${idRow}${polls}</div>`;
+}
+function renderPollsBox(){ const b=$('pollsBox'); if(b) b.innerHTML = pollsInnerHtml(); }
+function voteOffice(o){ state.office=o; localStorage.setItem('office',o); renderPollsBox(); }
+function voteName(v){ state.name=v.trim(); localStorage.setItem('name',state.name); }
+async function castVote(pid,oid){
+  if(!state.office) return toast('請先選辦公室');
+  if(!state.name) return toast('請先輸入姓名');
+  if(!(state.polls||[]).find(x=>x.id===pid)) return refreshPolls();
+  const mine=myVote(pid);
+  if(mine && mine.option_id===oid){
+    const { error } = await sb.from('votes').delete().eq('poll_id',pid).eq('office',state.office).eq('voter_name',state.name);
+    if(error) return toast('取消失敗：'+error.message);
+    toast('已收回投票');
+  } else {
+    const { error } = await sb.from('votes').upsert({poll_id:pid,option_id:oid,office:state.office,voter_name:state.name},{onConflict:'poll_id,office,voter_name'});
+    if(error){ toast('投票失敗：'+error.message); return refreshPolls(); }
+    toast('✅ 已投票');
+  }
+  await refreshPolls();
+}
+async function refreshPolls(){
+  const today=dstr(taipeiNow());
+  const { data } = await sb.from('polls').select('*').eq('status','open').gte('vote_date',today).order('vote_date');
+  state.polls=data||[];
+  await loadPollDetails();
+  renderPollsBox();
+}
+function startPollTimer(){
+  clearInterval(window._pollTimer);
+  window._pollTimer=setInterval(()=>{
+    if(location.hash==='#admin'){ clearInterval(window._pollTimer); return; }
+    if(document.activeElement && document.activeElement.id==='voteName') return; // 別打斷打字
+    if($('pollsBox')) refreshPolls(); else clearInterval(window._pollTimer);
+  }, 25000);
+}
+
 /* ╔═══════════════════════════════════╗
    ║             管理頁                 ║
    ╚═══════════════════════════════════╝ */
@@ -594,15 +690,18 @@ function renderAdmin(){
   let html = `
   <div class="tabs">
     <div class="tab ${adminState.tab==='schedule'?'on':''}" onclick="admTab('schedule')">📅 排菜單</div>
+    <div class="tab ${adminState.tab==='vote'?'on':''}" onclick="admTab('vote')">🗳 投票</div>
     <div class="tab ${adminState.tab==='rest'?'on':''}" onclick="admTab('rest')">🏪 店家</div>
     <div class="tab ${adminState.tab==='sum'?'on':''}" onclick="admTab('sum')">📊 彙總</div>
   </div>`;
   if(adminState.tab==='schedule') html+=admScheduleHtml();
+  if(adminState.tab==='vote') html+=admVoteHtml();
   if(adminState.tab==='rest') html+=admRestHtml();
   if(adminState.tab==='sum') html+=admSumHtml();
   html += `<div class="center" style="margin-top:4px"><a class="adminlink" href="#" onclick="location.hash='';return false">← 回點餐頁</a></div>`;
   $('view').innerHTML=html;
   if(adminState.tab==='schedule') pickCutDay(!!adminState.cutSameDay);
+  if(adminState.tab==='vote') buildPollAdmin();
   if(adminState.tab==='rest'){ if(adminState.curRest) loadRestItems(); else pickRtype(adminState.curType||'午餐'); }
   if(adminState.tab==='sum') buildSummary();
 }
@@ -805,6 +904,128 @@ async function delItem(id){
   const { error } = await sb.from('menu_items').delete().eq('id',id);
   if(error) return toast(error.message);
   loadRestItems();
+}
+
+/* ── 投票管理 ── */
+function admVoteHtml(){
+  const tmr=new Date(taipeiNow()); tmr.setDate(tmr.getDate()+1);
+  const sel=adminState.pvSel||[];
+  const chips=['午餐','飲料','團購'].map(t=>{
+    const rs=adminState.restaurants.filter(r=>(r.rtype||'午餐')===t);
+    if(!rs.length) return '';
+    return `<div class="muted" style="margin:6px 0 2px">${t==='午餐'?'🍱 午餐':t==='飲料'?'🥤 飲料':'📦 團購'}</div>
+      <div class="chips">${rs.map(r=>`<button class="chip sp ${sel.includes(r.id)?'on':''}" id="pv_${r.id}" onclick="togglePvRest('${r.id}')">${esc(r.name)}</button>`).join('')}</div>`;
+  }).join('');
+  return `
+  <div class="card">
+    <h2>發起投票</h2>
+    <label class="f">要決定的用餐日期</label>
+    <input type="date" id="pvDate" value="${dstr(tmr)}">
+    <label class="f">標題（選填）</label>
+    <input type="text" id="pvTitle" placeholder="例：週三午餐吃哪家">
+    <label class="f">候選店家（可多選）</label>
+    ${chips||'<div class="muted">尚無店家，請先到店家頁新增</div>'}
+    <label class="f">其他候選（選填，一行一個）</label>
+    <textarea id="pvExtra" rows="3" placeholder="例：自己帶便當&#10;都可以"></textarea>
+    <div class="center" style="margin-top:12px"><button class="btn" onclick="createPoll()">發起投票</button></div>
+  </div>
+  <div class="card">
+    <h2>進行中／近期投票</h2>
+    <div id="pollAdminList" class="muted">載入中…</div>
+  </div>`;
+}
+function togglePvRest(id){
+  adminState.pvSel ||= [];
+  const i=adminState.pvSel.indexOf(id);
+  if(i>=0) adminState.pvSel.splice(i,1); else adminState.pvSel.push(id);
+  const b=$('pv_'+id); if(b) b.classList.toggle('on');
+}
+async function createPoll(){
+  const vote_date=$('pvDate').value; if(!vote_date) return toast('請選用餐日期');
+  const title=$('pvTitle').value.trim()||null;
+  const restIds=adminState.pvSel||[];
+  const extra=$('pvExtra').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(restIds.length+extra.length<2) return toast('至少要有兩個候選');
+  const { data, error } = await sb.from('polls').insert({vote_date,title,status:'open'}).select().single();
+  if(error) return toast('建立失敗：'+error.message);
+  const pid=data.id; let so=0; const opts=[];
+  restIds.forEach(rid=>{ const r=adminState.restaurants.find(x=>x.id===rid); opts.push({poll_id:pid,restaurant_id:rid,label:r?.name||'?',sort_order:so++}); });
+  extra.forEach(t=>opts.push({poll_id:pid,restaurant_id:null,label:t,sort_order:so++}));
+  const { error:e2 } = await sb.from('poll_options').insert(opts);
+  if(e2) return toast('候選建立失敗：'+e2.message);
+  toast('✅ 投票已發起');
+  adminState.pvSel=[]; renderAdmin();
+}
+async function buildPollAdmin(){
+  const { data:polls } = await sb.from('polls').select('*').order('vote_date',{ascending:false}).limit(20);
+  const ids=(polls||[]).map(p=>p.id);
+  let O={}, V={};
+  if(ids.length){
+    const [o,v]=await Promise.all([
+      sb.from('poll_options').select('*').in('poll_id',ids).order('sort_order'),
+      sb.from('votes').select('*').in('poll_id',ids)
+    ]);
+    (o.data||[]).forEach(x=>(O[x.poll_id] ||= []).push(x));
+    (v.data||[]).forEach(x=>(V[x.poll_id] ||= []).push(x));
+  }
+  const box=$('pollAdminList'); if(!box) return;
+  if(!polls || polls.length===0){ box.innerHTML='<div class="muted">尚無投票</div>'; return; }
+  box.innerHTML = polls.map(p=>{
+    const opts=[...(O[p.id]||[])], votes=V[p.id]||[];
+    const cnt={}; votes.forEach(v=>cnt[v.option_id]=(cnt[v.option_id]||0)+1);
+    opts.sort((a,b)=>(cnt[b.id]||0)-(cnt[a.id]||0) || a.sort_order-b.sort_order);
+    const open=p.status==='open';
+    const rows=opts.map((o,i)=>{
+      const c=cnt[o.id]||0;
+      const voters=votes.filter(v=>v.option_id===o.id).map(v=>`${esc(v.office)}·${esc(v.voter_name)}`).join('、');
+      const lead=i===0 && c>0;
+      return `<div class="list-row" style="flex-wrap:wrap">
+        <div class="grow" style="min-width:150px">${lead?'🏆 ':''}<b>${esc(o.label)}</b> — ${c} 票${voters?`<br><span class="muted">${voters}</span>`:''}</div>
+        ${o.restaurant_id?`<button class="btn sm gray" onclick="pollOpenMenu('${p.id}','${o.restaurant_id}','${p.vote_date}')">開單</button>`:''}
+      </div>`;
+    }).join('');
+    return `<div class="dashed"></div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px">
+        <div style="flex:1;min-width:160px;font-weight:900;color:var(--red)">${esc(p.title||(mdw(p.vote_date)+' 吃哪家？'))}</div>
+        <span class="muted">${open?'🟢 進行中':'🔒 已結束'}・${votes.length} 票</span>
+      </div>
+      <div class="muted" style="margin-bottom:4px">🗳 ${mdw(p.vote_date)}</div>
+      ${rows}
+      <div class="center" style="margin:8px 0 2px">
+        <button class="btn sm gray" onclick="togglePoll('${p.id}','${open?'closed':'open'}')">${open?'結束投票':'重新開放'}</button>
+        <button class="btn sm gray" onclick="delPoll('${p.id}')">🗑 刪除</button>
+      </div>`;
+  }).join('');
+  clearInterval(window._pollAdmTimer);
+  window._pollAdmTimer=setInterval(()=>{
+    if(adminState.tab==='vote' && location.hash==='#admin') buildPollAdmin();
+    else clearInterval(window._pollAdmTimer);
+  }, 20000);
+}
+async function togglePoll(id,status){
+  const { error } = await sb.from('polls').update({status}).eq('id',id);
+  if(error) return toast(error.message);
+  toast(status==='open'?'已重新開放':'已結束投票');
+  buildPollAdmin();
+}
+async function delPoll(id){
+  if(!confirm('刪除這個投票？\n所有票也會一起刪除，無法復原。')) return;
+  const { error } = await sb.from('polls').delete().eq('id',id);
+  if(error) return toast(error.message);
+  toast('🗑 已刪除');
+  buildPollAdmin();
+}
+async function pollOpenMenu(pid,rid,date){
+  const r=adminState.restaurants.find(x=>x.id===rid);
+  if(!confirm(`用「${r?.name||''}」開 ${mdw(date)} 的菜單，並結束這個投票？`)) return;
+  const ex=adminState.menus.find(m=>m.menu_date===date && m.restaurant_id===rid);
+  const { error } = ex
+    ? await sb.from('daily_menus').update({is_closed:false}).eq('id',ex.id)
+    : await sb.from('daily_menus').insert({menu_date:date,restaurant_id:rid,cutoff_time:'15:30',cutoff_same_day:false,is_closed:false});
+  if(error) return toast('開單失敗：'+error.message);
+  await sb.from('polls').update({status:'closed'}).eq('id',pid);
+  toast('✅ 已開單並結束投票，可到「排菜單」調整結單時間');
+  loadAdmin();
 }
 
 /* ── 訂單彙總 ── */
