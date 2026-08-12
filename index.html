@@ -278,12 +278,15 @@ async function selectMenu(id){
   const open = state.menuList.find(m=>m.id===id);
   if(!open) return;
   state.menu = open; state.cart={}; state.notes={}; state.spicy={}; state.sugar={}; state.ice={}; state.pokeSel={}; state.myOrderId=null;
-  const [r1,r2,r3] = await Promise.all([
+  const [r1,r2,r3,r4] = await Promise.all([
     sb.from('restaurants').select('*').eq('id', open.restaurant_id).single(),
     sb.from('menu_items').select('*').eq('restaurant_id', open.restaurant_id).eq('active',true).order('sort_order'),
-    sb.from('orders').select('*').eq('daily_menu_id', open.id)
+    sb.from('orders').select('*').eq('daily_menu_id', open.id),
+    sb.from('wishes_with_counts').select('*').eq('restaurant_id', open.restaurant_id).order('total_support',{ascending:false}).order('created_at')
   ]);
-  state.restaurant = r1.data; state.items = r2.data||[]; state.orders = r3.data||[];
+  state.restaurant = r1.data; state.items = r2.data||[]; state.orders = r3.data||[]; state.wishes = r4.data||[];
+  const wids = state.wishes.map(w=>w.id);
+  state.wishSeconds = wids.length ? ((await sb.from('wish_seconds').select('*').in('wish_id',wids)).data||[]) : [];
   renderOrderPage();
 }
 
@@ -365,6 +368,8 @@ function renderOrderPage(){
     });
   }
   html += `</div>`;
+
+  html += wishSectionHtml();
 
   const totalOrders = state.orders.length;
   html += `<div class="card">
@@ -573,6 +578,84 @@ async function cancelMyOrder(){
   loadOrderPage();
 }
 
+/* ══════════════ 許願區（前台） ══════════════ */
+function mySecond(id){ return (state.wishSeconds||[]).find(s=>s.wish_id===id && s.office===state.office && s.voter_name===state.name); }
+function wishInnerHtml(){
+  const r=state.restaurant; if(!r) return '';
+  const wishes=state.wishes||[];
+  const secBy={}; (state.wishSeconds||[]).forEach(s=>(secBy[s.wish_id] ||= []).push(s));
+  const rows = wishes.length===0
+    ? '<div class="muted">還沒有人許願，當第一個吧！想吃菜單上沒有的就寫下來 👇</div>'
+    : wishes.map(w=>{
+        const list=secBy[w.id]||[];
+        const isMine = w.office===state.office && w.customer_name===state.name;
+        const iSeconded = !!mySecond(w.id);
+        const supporters=[`${esc(w.office)}·${esc(w.customer_name)}`].concat(list.map(s=>`${esc(s.office)}·${esc(s.voter_name)}`)).join('、');
+        const added=w.status==='added';
+        let btn;
+        if(added) btn=`<span class="cnt">✅ 已加入菜單</span>`;
+        else if(isMine) btn=`<button class="btn sm gray" onclick="delWish('${w.id}')">🗑 收回</button>`;
+        else btn=`<button class="btn sm ${iSeconded?'gray':''}" onclick="secondWish('${w.id}')">${iSeconded?'已附議 ✓':'👍 +1 附議'}</button>`;
+        return `<div class="vote-opt ${(iSeconded||isMine)?'mine':''}">
+          <div class="vote-top"><span>${esc(w.wish_text)}</span><span class="cnt">${w.total_support} 人想要</span></div>
+          <div class="voters">🙋 ${supporters}</div>
+          <div style="margin-top:6px">${btn}</div>
+        </div>`;
+      }).join('');
+  return `<div class="card"><h2>許願區</h2>
+    <div class="muted" style="margin-bottom:8px">菜單沒有想要的？寫下來許願，其他人可以「+1 附議」，人多老闆就有機會加菜 🙏</div>
+    <div style="display:flex;gap:8px;margin-bottom:4px">
+      <input type="text" id="wishInput" placeholder="想許願的品項（例：招牌滷味）" style="flex:1" onkeydown="if(event.key==='Enter')addWish()">
+      <button class="btn sm" onclick="addWish()">許願</button>
+    </div>
+    <div class="muted" style="margin-bottom:10px">👆 會用你上方填的辦公室＋姓名</div>
+    ${rows}
+  </div>`;
+}
+function wishSectionHtml(){ return `<div id="wishBox">${wishInnerHtml()}</div>`; }
+function renderWishBox(){ const b=$('wishBox'); if(b) b.innerHTML=wishInnerHtml(); }
+async function refreshWishes(){
+  if(!state.restaurant) return;
+  const { data } = await sb.from('wishes_with_counts').select('*').eq('restaurant_id',state.restaurant.id).order('total_support',{ascending:false}).order('created_at');
+  state.wishes=data||[];
+  const wids=state.wishes.map(w=>w.id);
+  state.wishSeconds = wids.length ? ((await sb.from('wish_seconds').select('*').in('wish_id',wids)).data||[]) : [];
+  renderWishBox();
+}
+async function addWish(){
+  if(!state.restaurant) return;
+  if(!state.office) return toast('請先選辦公室');
+  if(!state.name) return toast('請先輸入姓名');
+  const inp=$('wishInput'); const txt=(inp?.value||'').trim();
+  if(!txt) return toast('請輸入想許願的品項');
+  const { error } = await sb.from('wishes').insert({restaurant_id:state.restaurant.id, office:state.office, customer_name:state.name, wish_text:txt});
+  if(error) return toast('許願失敗：'+error.message);
+  if(inp) inp.value='';
+  toast('✅ 已許願！');
+  refreshWishes();
+}
+async function secondWish(id){
+  if(!state.office) return toast('請先選辦公室');
+  if(!state.name) return toast('請先輸入姓名');
+  if(mySecond(id)){
+    const { error } = await sb.from('wish_seconds').delete().eq('wish_id',id).eq('office',state.office).eq('voter_name',state.name);
+    if(error) return toast('取消失敗：'+error.message);
+    toast('已收回附議');
+  } else {
+    const { error } = await sb.from('wish_seconds').insert({wish_id:id, office:state.office, voter_name:state.name});
+    if(error && error.code!=='23505') return toast('附議失敗：'+error.message);
+    toast('✅ 已附議');
+  }
+  refreshWishes();
+}
+async function delWish(id){
+  if(!confirm('收回這則許願？')) return;
+  const { error } = await sb.from('wishes').delete().eq('id',id);
+  if(error) return toast('收回失敗：'+error.message);
+  toast('已收回');
+  refreshWishes();
+}
+
 /* ══════════════ 投票（前台） ══════════════ */
 async function loadPollDetails(){
   state.pollOpts={}; state.pollVotes={};
@@ -649,8 +732,10 @@ function startPollTimer(){
   clearInterval(window._pollTimer);
   window._pollTimer=setInterval(()=>{
     if(location.hash==='#admin'){ clearInterval(window._pollTimer); return; }
-    if(document.activeElement && document.activeElement.id==='voteName') return; // 別打斷打字
-    if($('pollsBox')) refreshPolls(); else clearInterval(window._pollTimer);
+    const typing = document.activeElement && ['voteName','wishInput','nameInput'].includes(document.activeElement.id);
+    if(typing) return; // 別打斷打字
+    if($('pollsBox')) refreshPolls(); else { clearInterval(window._pollTimer); return; }
+    if($('wishBox')) refreshWishes();
   }, 25000);
 }
 
@@ -688,21 +773,24 @@ async function loadAdmin(){
 
 function renderAdmin(){
   let html = `
-  <div class="tabs">
+  <div class="tabs" style="flex-wrap:wrap">
     <div class="tab ${adminState.tab==='schedule'?'on':''}" onclick="admTab('schedule')">📅 排菜單</div>
     <div class="tab ${adminState.tab==='vote'?'on':''}" onclick="admTab('vote')">🗳 投票</div>
     <div class="tab ${adminState.tab==='rest'?'on':''}" onclick="admTab('rest')">🏪 店家</div>
+    <div class="tab ${adminState.tab==='wish'?'on':''}" onclick="admTab('wish')">🙏 許願</div>
     <div class="tab ${adminState.tab==='sum'?'on':''}" onclick="admTab('sum')">📊 彙總</div>
   </div>`;
   if(adminState.tab==='schedule') html+=admScheduleHtml();
   if(adminState.tab==='vote') html+=admVoteHtml();
   if(adminState.tab==='rest') html+=admRestHtml();
+  if(adminState.tab==='wish') html+=admWishHtml();
   if(adminState.tab==='sum') html+=admSumHtml();
   html += `<div class="center" style="margin-top:4px"><a class="adminlink" href="#" onclick="location.hash='';return false">← 回點餐頁</a></div>`;
   $('view').innerHTML=html;
   if(adminState.tab==='schedule') pickCutDay(!!adminState.cutSameDay);
   if(adminState.tab==='vote') buildPollAdmin();
   if(adminState.tab==='rest'){ if(adminState.curRest) loadRestItems(); else pickRtype(adminState.curType||'午餐'); }
+  if(adminState.tab==='wish') buildWishAdmin();
   if(adminState.tab==='sum') buildSummary();
 }
 function admTab(t){ adminState.tab=t; renderAdmin(); }
@@ -1026,6 +1114,52 @@ async function pollOpenMenu(pid,rid,date){
   await sb.from('polls').update({status:'closed'}).eq('id',pid);
   toast('✅ 已開單並結束投票，可到「排菜單」調整結單時間');
   loadAdmin();
+}
+
+/* ── 許願管理 ── */
+function admWishHtml(){
+  return `<div class="card"><h2>許願清單</h2>
+    <div class="muted" style="margin-bottom:8px">同事許願＋附議的品項，依店家分組、人氣高的排前面。標「已加入」或刪除；要真的上架請到「🏪 店家」批次新增。</div>
+    <div id="wishAdminList" class="muted">載入中…</div>
+  </div>`;
+}
+async function buildWishAdmin(){
+  const [w,s]=await Promise.all([
+    sb.from('wishes_with_counts').select('*').order('total_support',{ascending:false}).order('created_at'),
+    sb.from('wish_seconds').select('*')
+  ]);
+  const wishes=w.data||[]; const secBy={}; (s.data||[]).forEach(x=>(secBy[x.wish_id] ||= []).push(x));
+  const box=$('wishAdminList'); if(!box) return;
+  if(wishes.length===0){ box.innerHTML='<div class="muted">目前沒有任何許願</div>'; return; }
+  const byRest={}; wishes.forEach(x=>{ const k=x.restaurant_name||'（未指定店家）'; (byRest[k] ||= []).push(x); });
+  box.innerHTML = Object.keys(byRest).map(rn=>{
+    const rows=byRest[rn].map(x=>{
+      const list=secBy[x.id]||[];
+      const supporters=[`${esc(x.office)}·${esc(x.customer_name)}`].concat(list.map(v=>`${esc(v.office)}·${esc(v.voter_name)}`)).join('、');
+      const added=x.status==='added';
+      return `<div class="list-row" style="flex-wrap:wrap">
+        <div class="grow" style="min-width:160px">${added?'✅ ':''}<b>${esc(x.wish_text)}</b> — ${x.total_support} 人<br><span class="muted">🙋 ${supporters}</span></div>
+        <button class="btn sm ${added?'gray':'green'}" onclick="setWishStatus('${x.id}','${added?'pending':'added'}')">${added?'↩ 未處理':'✅ 已加入'}</button>
+        <button class="btn sm gray" onclick="admDelWish('${x.id}')">🗑</button>
+      </div>`;
+    }).join('');
+    return `<div style="font-weight:900;color:var(--red);font-size:16px;margin:12px 0 4px">🏪 ${esc(rn)}</div>${rows}`;
+  }).join('<div class="dashed"></div>');
+  clearInterval(window._wishAdmTimer);
+  window._wishAdmTimer=setInterval(()=>{ if(adminState.tab==='wish' && location.hash==='#admin') buildWishAdmin(); else clearInterval(window._wishAdmTimer); },20000);
+}
+async function setWishStatus(id,st){
+  const { error } = await sb.from('wishes').update({status:st}).eq('id',id);
+  if(error) return toast(error.message);
+  toast(st==='added'?'✅ 已標記加入':'已改回未處理');
+  buildWishAdmin();
+}
+async function admDelWish(id){
+  if(!confirm('刪除這則許願？附議也會一起刪除。')) return;
+  const { error } = await sb.from('wishes').delete().eq('id',id);
+  if(error) return toast(error.message);
+  toast('🗑 已刪除');
+  buildWishAdmin();
 }
 
 /* ── 訂單彙總 ── */
