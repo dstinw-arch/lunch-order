@@ -603,7 +603,7 @@ function wishInnerHtml(){
         </div>`;
       }).join('');
   return `<div class="card"><h2>許願區</h2>
-    <div class="muted" style="margin-bottom:8px">菜單沒有想要的？寫下來許願，其他人可以「+1 附議」，午餐小編會補上 🙏</div>
+    <div class="muted" style="margin-bottom:8px">菜單沒有想要的？寫下來許願，其他人可以「+1 附議」，人多老闆就有機會加菜 🙏</div>
     <div style="display:flex;gap:8px;margin-bottom:4px">
       <input type="text" id="wishInput" placeholder="想許願的品項（例：招牌滷味）" style="flex:1" onkeydown="if(event.key==='Enter')addWish()">
       <button class="btn sm" onclick="addWish()">許願</button>
@@ -1189,8 +1189,12 @@ async function buildSummary(){
   const sortMap={}; (r3.data||[]).forEach(mi=>sortMap[mi.name]=mi.sort_order);
   if(orders.length===0){ $('sumBody').innerHTML='這天還沒有任何訂單'; return; }
 
-  // 品項統計：依「品項＋每筆數量」分組，顯示各數量出現幾筆（叫餐用）；
-  // 每筆數量=1 維持「品名 ×人數」；數量>1 展開為「品名×數量（N份）」。加辣/備註以括號註記；飲料依糖度/冰量分列
+  // 品項統計（叫餐用）
+  // 午餐：依「品項＋每筆數量」分組（鍋貼/水餃這種按份點的要看得出每人幾顆）
+  //       每筆數量=1 顯示「品名 ×人數」；數量>1 展開為「品名×數量（N份）」
+  // 團購/飲料：只依品項加總，顯示「品名 ×總數」（老闆只要知道總共幾個）
+  // 加辣/備註以括號註記；飲料依糖度/冰量分列
+  const splitByQty = (rest?.rtype === '午餐');
   const stat={}; let grandQty=0, grandAmt=0;
   orders.forEach(o=>(o.items||[]).forEach(x=>{
     let base = x.name;
@@ -1198,8 +1202,9 @@ async function buildSummary(){
       const parts=[sugarLbl(x.sugar), iceLbl(x.ice)].filter(Boolean);
       base += `〔${parts.join('/')}〕`;
     }
-    const key = base + '\u001F' + x.qty;
-    const s = stat[key] ||= {base, qty:x.qty, count:0, spicy:0, notes:{}};
+    const key = splitByQty ? base + '\u001F' + x.qty : base;
+    const s = stat[key] ||= {base, qty:0, count:0, spicy:0, notes:{}};
+    s.qty = splitByQty ? x.qty : s.qty + x.qty;
     s.count += 1; if(x.spicy==='加辣') s.spicy += 1;
     const nt=(x.note||'').trim(); if(nt) s.notes[nt]=(s.notes[nt]||0)+1;
     grandQty+=x.qty; grandAmt+=x.qty*x.price;
@@ -1210,14 +1215,16 @@ async function buildSummary(){
     return sa-sbb || (A.base<B.base?-1:A.base>B.base?1:0) || (B.qty-A.qty);
   });
 
-  let txt=`📢 ${mdw(date)} 午餐訂單彙總\n🏪 ${rest?.name||''}${rest?.phone?`（${rest.phone}）`:''}\n`;
+  let txt=`📢 ${mdw(date)} ${rest?.rtype||'午餐'}訂單彙總\n🏪 ${rest?.name||''}${rest?.phone?`（${rest.phone}）`:''}\n`;
   txt+=`━━━━━━━━━━\n🍱 品項統計（叫餐用）\n`;
   for(const k of statKeys){
     const s=stat[k];
     const ann=[];
     if(s.spicy) ann.push(s.spicy===s.count?'都加辣':`${s.spicy}份加辣`);
     Object.entries(s.notes).sort((a,b)=>b[1]-a[1]).forEach(([nt,c])=>ann.push(`${nt}×${c}`));
-    const head = s.qty===1 ? `${s.base} ×${s.count}` : `${s.base}×${s.qty}（${s.count}份）`;
+    const head = !splitByQty ? `${s.base} ×${s.qty}`
+               : s.qty===1 ? `${s.base} ×${s.count}`
+               : `${s.base}×${s.qty}（${s.count}份）`;
     txt+=`・${head}${ann.length?`（${ann.join('、')}）`:''}\n`;
   }
   txt+=`共 ${grandQty} 份\n━━━━━━━━━━\n`;
