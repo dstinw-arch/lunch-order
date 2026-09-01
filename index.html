@@ -123,6 +123,26 @@ input:focus,select:focus,textarea:focus{outline:3px solid var(--yellow-deep)}
   background:#FFF3B8;border:2px dashed var(--red);border-radius:10px;
   padding:10px 12px;font-size:14.5px;color:var(--red-dark);font-weight:700;margin-bottom:10px;
 }
+/* ── 每日餐盒照片 ── */
+.menu-photo{
+  margin:0 0 10px;border:2px solid var(--ink);border-radius:12px;overflow:hidden;
+  box-shadow:3px 3px 0 rgba(58,42,24,.85);background:var(--cream);line-height:0;
+}
+.menu-photo img{width:100%;height:auto;display:block;cursor:zoom-in}
+.menu-photo .cap{
+  line-height:1.4;padding:7px 10px;font-size:13px;font-weight:700;
+  color:var(--red-dark);background:var(--cream);border-top:2px solid var(--ink);
+}
+.photo-lb{
+  position:fixed;inset:0;z-index:9999;background:rgba(30,22,12,.88);
+  display:flex;align-items:center;justify-content:center;padding:16px;cursor:zoom-out;
+}
+.photo-lb img{max-width:100%;max-height:92vh;border-radius:10px}
+.photo-prev{
+  margin-top:8px;border:2px dashed var(--ink);border-radius:10px;padding:8px;
+  display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+}
+.photo-prev img{width:88px;height:88px;object-fit:cover;border-radius:8px;border:2px solid var(--ink)}
 .closed-banner{
   text-align:center;padding:30px 10px;
 }
@@ -231,13 +251,60 @@ const SUGARS_ALL=['無糖','一分','三分','五分','八分','正常'];
 const ICES=['去冰','微冰','少冰','正常'];
 const sugarLbl = s => s ? (s==='無糖'?'無糖':s+'糖') : '';
 const iceLbl = s => s ? (s==='正常'?'正常冰':s) : '';
-let adminState = { tab:'schedule', restaurants:[], menus:[], curRest:null, curItems:[], sumMenuId:null };
+let adminState = { tab:'schedule', restaurants:[], menus:[], curRest:null, curItems:[], sumMenuId:null, photo:null, photoTouched:false, photoLoadSeq:0 };
 
 /* ══════════════ 路由 ══════════════ */
 window.addEventListener('hashchange', route);
 function route(){
   $('bottombar').style.display='none';
   if(location.hash==='#admin'){ renderAdminGate(); } else { loadOrderPage(); }
+}
+
+/* ══════════════ 餐點照片 ══════════════ */
+// daily_menus 的欄位清單，刻意排除 image_url（圖片是 base64，很肥，不能整批撈）
+const MENU_COLS = 'id,menu_date,restaurant_id,cutoff_time,cutoff_same_day,is_closed,announcement,has_image,created_at';
+const PHOTO_MAX_PX = 640;      // 最長邊
+const PHOTO_MAX_KB = 180;      // 存進資料庫的上限
+
+function openPhoto(){
+  const src = state.menu?.image_url; if(!src) return;
+  const d = document.createElement('div');
+  d.className = 'photo-lb';
+  d.innerHTML = `<img src="${esc(src)}" alt="餐點示意圖">`;
+  d.onclick = ()=>d.remove();
+  document.body.appendChild(d);
+}
+
+/* 手機直接拍的照片動輒 3~5MB，這裡在瀏覽器端先裁成正方形、縮圖、
+   並套一點提亮/對比/飽和度，再轉 base64。避免每天手動修圖。 */
+function compressPhoto(file){
+  return new Promise((resolve,reject)=>{
+    const fr = new FileReader();
+    fr.onerror = ()=>reject(new Error('讀取檔案失敗'));
+    fr.onload = ()=>{
+      const img = new Image();
+      img.onerror = ()=>reject(new Error('這個檔案不是圖片'));
+      img.onload = ()=>{
+        // 置中裁成正方形（多數餐盒照都是置中拍，順便把上下留白切掉）
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side)/2, sy = (img.height - side)/2;
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = Math.min(side, PHOTO_MAX_PX);
+        const ctx = cv.getContext('2d');
+        ctx.filter = 'brightness(1.13) contrast(1.07) saturate(1.15)';
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, cv.width, cv.height);
+        // 逐步降畫質直到符合大小上限
+        let q = 0.78, out = cv.toDataURL('image/jpeg', q);
+        while(out.length/1024 > PHOTO_MAX_KB && q > 0.35){
+          q -= 0.08; out = cv.toDataURL('image/jpeg', q);
+        }
+        if(out.length/1024 > PHOTO_MAX_KB) return reject(new Error('圖片太大，請換一張'));
+        resolve(out);
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
 }
 
 /* ══════════════ 標題 ══════════════ */
@@ -252,7 +319,7 @@ async function loadOrderPage(){
   $('view').innerHTML = '<div class="card center">載入中…🍜</div>';
   const today = dstr(taipeiNow());
   const [mres, rres, pres] = await Promise.all([
-    sb.from('daily_menus').select('*').gte('menu_date', today).order('menu_date'),
+    sb.from('daily_menus').select(MENU_COLS).gte('menu_date', today).order('menu_date'),
     sb.from('restaurants').select('id,name,rtype'),
     sb.from('polls').select('*').eq('status','open').gte('vote_date', today).order('vote_date')
   ]);
@@ -278,12 +345,16 @@ async function selectMenu(id){
   const open = state.menuList.find(m=>m.id===id);
   if(!open) return;
   state.menu = open; state.cart={}; state.notes={}; state.spicy={}; state.sugar={}; state.ice={}; state.pokeSel={}; state.myOrderId=null;
-  const [r1,r2,r3,r4] = await Promise.all([
+  const [r1,r2,r3,r4,r5] = await Promise.all([
     sb.from('restaurants').select('*').eq('id', open.restaurant_id).single(),
     sb.from('menu_items').select('*').eq('restaurant_id', open.restaurant_id).eq('active',true).order('sort_order'),
     sb.from('orders').select('*').eq('daily_menu_id', open.id),
-    sb.from('wishes_with_counts').select('*').eq('restaurant_id', open.restaurant_id).order('total_support',{ascending:false}).order('created_at')
+    sb.from('wishes_with_counts').select('*').eq('restaurant_id', open.restaurant_id).order('total_support',{ascending:false}).order('created_at'),
+    // 照片只在選到這張單時才抓，避免頁籤一次載入所有圖
+    open.has_image ? sb.from('daily_menus').select('image_url,image_caption').eq('id', open.id).single() : Promise.resolve({data:null})
   ]);
+  open.image_url = r5.data?.image_url || null;
+  open.image_caption = r5.data?.image_caption || null;
   state.restaurant = r1.data; state.items = r2.data||[]; state.orders = r3.data||[]; state.wishes = r4.data||[];
   const wids = state.wishes.map(w=>w.id);
   state.wishSeconds = wids.length ? ((await sb.from('wish_seconds').select('*').in('wish_id',wids)).data||[]) : [];
@@ -310,6 +381,10 @@ function renderOrderPage(){
   <div class="card">
     <h2>${esc(mdw(m.menu_date))} 訂：${esc(r?.name||'')}</h2>
     <div class="center" style="margin-bottom:8px"><span class="countdown" id="cd">⏰ 結單：${co.getMonth()+1}/${co.getDate()} ${String(co.getHours()).padStart(2,'0')}:${String(co.getMinutes()).padStart(2,'0')}</span></div>
+    ${m.image_url?`<div class="menu-photo">
+      <img src="${esc(m.image_url)}" alt="今日餐點示意圖" onclick="openPhoto()">
+      <div class="cap">📷 ${esc(m.image_caption||'餐點示意圖，實際內容以店家出餐為準')}</div>
+    </div>`:''}
     ${m.announcement?`<div class="notice">📣 ${esc(m.announcement)}</div>`:''}
     ${r?.note?`<div class="muted">ℹ️ ${esc(r.note)}</div>`:''}
   </div>
@@ -760,7 +835,7 @@ async function loadAdmin(){
   $('view').innerHTML='<div class="card center">載入中…</div>';
   const [r1,r2] = await Promise.all([
     sb.from('restaurants').select('*').order('created_at'),
-    sb.from('daily_menus').select('*').order('menu_date',{ascending:false}).limit(30)
+    sb.from('daily_menus').select(MENU_COLS).order('menu_date',{ascending:false}).limit(30)
   ]);
   adminState.restaurants=r1.data||[]; adminState.menus=r2.data||[];
   if(!adminState.sumMenuId || !adminState.menus.find(m=>m.id===adminState.sumMenuId)){
@@ -821,6 +896,10 @@ function admScheduleHtml(){
     <input type="time" id="mCut" value="15:30">
     <label class="f">公告（選填，會顯示給同事）</label>
     <input type="text" id="mAnn" placeholder="例：湯品可備註辣度">
+    <label class="f">餐點照片（選填，會顯示在點餐頁最上方）</label>
+    <input type="file" id="mPhoto" accept="image/*" onchange="onPhotoPick(this)">
+    <input type="text" id="mCap" placeholder="照片說明，例：主餐為泡菜炒牛肉" style="margin-top:6px">
+    <div id="mPhotoPrev"></div>
     <div class="muted" style="margin-top:6px">💡 同一天可以排多個菜單（例如便當、飲料各一），點餐頁會出現切換頁籤</div>
     <div class="center" style="margin-top:12px"><button class="btn" onclick="saveMenu()">發布 / 更新</button></div>
   </div>
@@ -834,8 +913,9 @@ function admScheduleHtml(){
       const r=adminState.restaurants.find(x=>x.id===m.restaurant_id);
       const st = m.is_closed?'🔒已結單':(isOpen(m)?'🟢開放中':'⏰已過結單時間');
       return `<div class="list-row" style="flex-wrap:wrap">
-        <div class="grow" style="min-width:180px"><b>${mdw(m.menu_date)}</b> ${esc(r?.name||'?')}<br><span class="muted">${st}｜${m.cutoff_same_day?'當天':'前一天'} ${(m.cutoff_time||'').slice(0,5)} 結單${m.announcement?`｜📢 ${esc(m.announcement)}`:''}</span></div>
+        <div class="grow" style="min-width:180px"><b>${mdw(m.menu_date)}</b> ${esc(r?.name||'?')}<br><span class="muted">${st}${m.has_image?'｜🖼 有照片':''}｜${m.cutoff_same_day?'當天':'前一天'} ${(m.cutoff_time||'').slice(0,5)} 結單${m.announcement?`｜📢 ${esc(m.announcement)}`:''}</span></div>
         <button class="btn sm gray" onclick="editMenu('${m.id}')">✏️ 編輯</button>
+        ${m.has_image?`<button class="btn sm gray" onclick="removePhoto('${m.id}')">🚫 移除照片</button>`:''}
         <button class="btn sm gray" onclick="toggleClose('${m.id}',${!m.is_closed})">${m.is_closed?'重新開放':'提前結單'}</button>
         <button class="btn sm gray" onclick="delMenu('${m.id}')">🗑 刪除</button>
       </div>`;
@@ -848,14 +928,43 @@ function pickCutDay(same){
   if(p) p.classList.toggle('on', !same);
   if(s) s.classList.toggle('on', same);
 }
+async function onPhotoPick(el){
+  const f = el.files && el.files[0];
+  if(!f) return;
+  toast('壓縮中…');
+  try{
+    adminState.photo = await compressPhoto(f);
+    adminState.photoTouched = true;
+    renderPhotoPrev();
+    toast('✅ 照片已就緒，記得按「發布 / 更新」');
+  }catch(e){ adminState.photo=null; adminState.photoTouched=true; renderPhotoPrev(); toast('❌ '+e.message); }
+  el.value = '';
+}
+function renderPhotoPrev(){
+  const box = $('mPhotoPrev'); if(!box) return;
+  const p = adminState.photo;
+  box.innerHTML = p
+    ? `<div class="photo-prev"><img src="${esc(p)}" alt="預覽">
+         <div class="grow"><b>已選好照片</b><br><span class="muted">約 ${Math.round(p.length/1024)} KB</span></div>
+         <button class="btn sm gray" onclick="clearPhoto()">移除</button></div>`
+    : '';
+}
+function clearPhoto(){ adminState.photo = null; adminState.photoTouched = true; renderPhotoPrev(); }
+
 async function saveMenu(){
   const row = { menu_date:$('mDate').value, restaurant_id:$('mRest').value, cutoff_time:$('mCut').value, cutoff_same_day:!!adminState.cutSameDay, announcement:$('mAnn').value.trim()||null, is_closed:false };
+  // 只有真的動過照片才寫這兩欄，避免單純改時間就把舊圖洗掉，也不用重傳一次 base64
+  if(adminState.photoTouched){
+    row.image_url = adminState.photo || null;
+    row.image_caption = adminState.photo ? ($('mCap').value.trim()||null) : null;
+  }
   if(!row.menu_date||!row.restaurant_id) return toast('請選日期與店家');
   const exist = adminState.menus.find(m=>m.menu_date===row.menu_date && m.restaurant_id===row.restaurant_id);
   const { error } = exist
     ? await sb.from('daily_menus').update(row).eq('id',exist.id)
     : await sb.from('daily_menus').insert(row);
   if(error) return toast('儲存失敗：'+error.message);
+  adminState.photo = null; adminState.photoTouched = false;
   toast('✅ 菜單已發布');
   loadAdmin();
 }
@@ -865,7 +974,7 @@ async function toggleClose(id,close){
   toast(close?'已結單':'已重新開放');
   loadAdmin();
 }
-function editMenu(id){
+async function editMenu(id){
   const m=adminState.menus.find(x=>x.id===id);
   if(!m) return toast('找不到這張單');
   $('mDate').value = m.menu_date;
@@ -873,8 +982,31 @@ function editMenu(id){
   $('mCut').value  = (m.cutoff_time||'').slice(0,5);
   $('mAnn').value  = m.announcement||'';
   pickCutDay(!!m.cutoff_same_day);
+  adminState.photo = null; adminState.photoTouched = false;
+  const token = ++adminState.photoLoadSeq;
+  $('mCap').value = '';
+  renderPhotoPrev();
   window.scrollTo({top:0,behavior:'smooth'});
   toast('已載入，改完按「發布 / 更新」');
+  if(m.has_image){
+    const { data } = await sb.from('daily_menus').select('image_url,image_caption').eq('id',id).single();
+    // 圖片是慢慢載的，期間使用者可能已經按了「移除」或改編輯別張單，這時就不要蓋回去
+    if(token !== adminState.photoLoadSeq || adminState.photoTouched) return;
+    if(data?.image_url){ adminState.photo = data.image_url; $('mCap').value = data.image_caption||''; renderPhotoPrev(); }
+  }
+}
+
+async function removePhoto(id){
+  const m = adminState.menus.find(x=>x.id===id);
+  const label = m ? `${mdw(m.menu_date)} ${rname(m.restaurant_id)}` : '這張單';
+  if(!confirm(`移除「${label}」的照片？\n訂單資料不受影響。`)) return;
+  const { error } = await sb.from('daily_menus').update({image_url:null, image_caption:null}).eq('id',id);
+  if(error) return toast('移除失敗：'+error.message);
+  // 如果表單正好載著這張單的圖，一併清掉
+  adminState.photoLoadSeq = (adminState.photoLoadSeq||0)+1;
+  adminState.photo = null; adminState.photoTouched = false;
+  toast('🗑 照片已移除');
+  loadAdmin();
 }
 async function delMenu(id){
   const m=adminState.menus.find(x=>x.id===id);
