@@ -15,6 +15,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Huninn&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js" defer></script>
 <style>
 :root{
   --yellow:#F6CE53;        /* 菜單主黃 */
@@ -1315,10 +1316,11 @@ async function buildSummary(){
   const [r1,r2,r3]=await Promise.all([
     sb.from('restaurants').select('*').eq('id',menu.restaurant_id).single(),
     sb.from('orders').select('*').eq('daily_menu_id',menu.id).order('office').order('created_at'),
-    sb.from('menu_items').select('name,sort_order').eq('restaurant_id',menu.restaurant_id)
+    sb.from('menu_items').select('id,name,category,sort_order,no_split').eq('restaurant_id',menu.restaurant_id)
   ]);
   const rest=r1.data, orders=r2.data||[];
-  const sortMap={}; (r3.data||[]).forEach(mi=>sortMap[mi.name]=mi.sort_order);
+  const mitems=r3.data||[];
+  const sortMap={}; mitems.forEach(mi=>sortMap[mi.name]=mi.sort_order);
   if(orders.length===0){ $('sumBody').innerHTML='這天還沒有任何訂單'; return; }
 
   // 品項統計（叫餐用）
@@ -1401,11 +1403,13 @@ async function buildSummary(){
     <pre class="line-out" id="lineTxt">${esc(txt)}</pre>
     <div class="center" style="margin-top:10px">
       <button class="btn green" onclick="copyLine()">📋 複製 LINE 文字</button>
+      <button class="btn" onclick="exportPrepExcel()">📊 匯出備餐 Excel</button>
       <button class="btn sm gray" onclick="buildSummary();toast('已更新')">🔄</button>
     </div>
     ${payHtml}`;
   window._lineTxt=txt;
   window._sumOrders=orders;
+  window._sumMeta={ date, rest, orders, mitems };
   clearInterval(window._sumTimer);
   window._sumTimer = setInterval(()=>{
     if(adminState.tab==='sum' && location.hash==='#admin') buildSummary();
@@ -1426,6 +1430,124 @@ async function togglePaid(id,checked){
   if(error){ toast('更新失敗：'+error.message); return; }
   buildSummary();
 }
+/* ── 匯出備餐 Excel ──
+   排序：類別 → 品項 → 位置 → 名字
+   拆列：一般品項 ×N 拆成 N 列；menu_items.no_split=true（八方水餃/鍋貼等以顆計價）維持一列
+   金額：D 欄「$單品/$個人總額」供標籤列印，F/G 欄為數值版，合計只加總 F 欄            */
+const XL_OFFICE_ORDER=['69','67前面','67後面','837','元大'];   // 匯出專用位置順序（不影響點餐頁的按鈕排列）
+const XL_OFF_FILL={'837':'FDE7DC','69':'DCF0F0','67前面':'E2ECF9','67後面':'EBE2F7','元大':'E4F2DE'};
+const offShort = o => String(o||'').replace(/^67/,'');
+const xlFill = hex => ({type:'pattern',pattern:'solid',fgColor:{argb:'FF'+hex}});
+const XL_BORDER = (()=>{ const s={style:'thin',color:{argb:'FFBFD9DE'}}; return {top:s,left:s,bottom:s,right:s}; })();
+
+async function exportPrepExcel(){
+  const meta=window._sumMeta;
+  if(!meta||!meta.orders.length) return toast('這天還沒有訂單');
+  if(typeof ExcelJS==='undefined') return toast('Excel 元件還在載入，請稍候再按一次');
+  const {date, rest, orders, mitems}=meta;
+
+  const byId={}, byName={}, catMin={};
+  mitems.forEach(mi=>{
+    byId[mi.id]=mi; if(byName[mi.name]===undefined) byName[mi.name]=mi;
+    const c=mi.category||'其他', s=mi.sort_order??9999;
+    if(catMin[c]===undefined || s<catMin[c]) catMin[c]=s;
+  });
+
+  const rows=[];
+  orders.forEach(o=>{
+    (o.items||[]).forEach(x=>{
+      const mi=byId[x.item_id]||byName[x.name]||{};
+      const cat=mi.category||'其他';
+      const tags=[sugarLbl(x.sugar), iceLbl(x.ice), x.spicy, x.note].filter(Boolean);
+      const tag=tags.length?`〔${tags.join('、')}〕`:'';
+      const qty=x.qty||1, unit=Number(x.price)||0;
+      const base={off:o.office, who:o.customer_name, cat, key:x.name, tot:Number(o.total)||0};
+      if(mi.no_split || qty===1){
+        rows.push({...base, item:`${x.name}${qty>1?`×${qty}`:''}${tag}`, amt:unit*qty});
+      }else{
+        for(let i=0;i<qty;i++) rows.push({...base, item:`${x.name}${tag}`, amt:unit});
+      }
+    });
+  });
+
+  const ci=r=>(catMin[r.cat]??9999);
+  const oi=r=>{ const i=XL_OFFICE_ORDER.indexOf(r.off); return i<0?99:i; };
+  const cmp=(a,b,...ks)=>{ for(const k of ks){ const d=k(a,b); if(d) return d; } return 0; };
+  const byCat=[...rows].sort((a,b)=>cmp(a,b,
+    (x,y)=>ci(x)-ci(y), (x,y)=>x.key.localeCompare(y.key,'zh-Hant'),
+    (x,y)=>oi(x)-oi(y), (x,y)=>x.who.localeCompare(y.who,'zh-Hant')));
+  const byPerson=[...rows].sort((a,b)=>oi(a)-oi(b));  // 穩定排序：位置分區，區內維持原始人員順序
+
+  const wb=new ExcelJS.Workbook();
+  wb.creator='今日點餐';
+  const HEAD=[['位置','off',9],['名字','who',11],['品項','item',40],
+              ['金額','money',14],['類別','cat',12],['單價','amt',10],['個人總額','tot',12]];
+
+  const mkSheet=(title, data, grouped, notes)=>{
+    const ws=wb.addWorksheet(title,{views:[{state:'frozen',ySplit:1}]});
+    ws.columns=HEAD.map(h=>({header:h[0],key:h[1],width:h[2]}));
+    const hr=ws.getRow(1); hr.height=24;
+    hr.eachCell(c=>{ c.font={name:'微軟正黑體',bold:true,size:12,color:{argb:'FFFFFFFF'}};
+      c.fill=xlFill('379392'); c.alignment={horizontal:'center',vertical:'middle'}; c.border=XL_BORDER; });
+
+    let prev=null;
+    data.forEach(r=>{
+      if(grouped && r.cat!==prev){
+        const dr=ws.addRow(['◆ '+r.cat]);
+        ws.mergeCells(dr.number,1,dr.number,7);
+        for(let c=1;c<=7;c++){ const cell=dr.getCell(c); cell.fill=xlFill('FFF2DC'); cell.border=XL_BORDER; }
+        dr.getCell(1).font={name:'微軟正黑體',bold:true,size:11,color:{argb:'FF8A5A12'}};
+        dr.getCell(1).alignment={horizontal:'left',vertical:'middle'};
+        prev=r.cat;
+      }
+      const row=ws.addRow({off:offShort(r.off), who:r.who, item:r.item,
+        money:`$${r.amt}/$${r.tot}`, cat:r.cat, amt:r.amt, tot:r.tot});
+      row.eachCell({includeEmpty:true},(cell,c)=>{
+        cell.font={name:'微軟正黑體',size:11};
+        cell.border=XL_BORDER;
+        cell.fill=xlFill(c===1?(XL_OFF_FILL[r.off]||'FFFFFF'):'FFFFFF');
+        if(c===6||c===7){ cell.numFmt='$#,##0'; cell.alignment={horizontal:'right',vertical:'middle'}; }
+        else if(c===3) cell.alignment={horizontal:'left',vertical:'middle',wrapText:true};
+        else cell.alignment={horizontal:'center',vertical:'middle'};
+      });
+    });
+
+    const last=ws.rowCount;
+    const tr=ws.addRow([]);
+    ws.mergeCells(tr.number,1,tr.number,4);
+    tr.getCell(1).value='合計';
+    tr.getCell(5).value=`${rows.length} 項`;
+    tr.getCell(6).value={formula:`SUM(F2:F${last})`};
+    tr.height=22;
+    for(let c=1;c<=7;c++){ const cell=tr.getCell(c);
+      cell.font={name:'微軟正黑體',bold:true,size:12,color:{argb:'FFFFFFFF'}};
+      cell.fill=xlFill('4F86C6'); cell.border=XL_BORDER;
+      cell.alignment={horizontal:c===6?'right':'center',vertical:'middle'};
+      if(c===6) cell.numFmt='$#,##0'; }
+    ws.autoFilter={from:{row:1,column:1},to:{row:last,column:7}};
+    notes.forEach((t,i)=>{ ws.getRow(tr.number+2+i).getCell(1).value=t;
+      ws.getRow(tr.number+2+i).getCell(1).font={name:'微軟正黑體',size:10,italic:true,color:{argb:'FF6C49B8'}}; });
+    return ws;
+  };
+
+  mkSheet('備餐_按類別', byCat, true, [
+    '排序：類別 → 品項 → 位置（'+XL_OFFICE_ORDER.map(offShort).join('→')+'）→ 名字。',
+    '金額欄為「單品/個人總額」，供標籤列印；F、G 欄為數值版，合計只加總 F 欄單價。',
+    '以顆計價的品項（水餃、鍋貼等）不依數量拆列，維持「品名×N」一列。']);
+  mkSheet('發餐對帳_按人', byPerson, false, [
+    '依位置分區、區內維持原始人員順序，供發餐點名與收款對帳。',
+    'G 欄個人總額每列重複，勿直接加總。']);
+
+  const buf=await wb.xlsx.writeBuffer();
+  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`${date}_${(rest?.name||'訂單').replace(/[\\/:*?"<>|]/g,'')}_備餐明細.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+  toast(`✅ 已匯出 ${rows.length} 列`);
+}
+
 async function copyLine(){
   try{ await navigator.clipboard.writeText(window._lineTxt); toast('✅ 已複製，去貼到 LINE 群組吧'); }
   catch(e){
