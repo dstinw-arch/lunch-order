@@ -82,6 +82,29 @@ input:focus,select:focus,textarea:focus{outline:3px solid var(--yellow-deep)}
   color:var(--red);font-weight:900;font-size:17px;margin:14px 0 4px;
 }
 .cat-title::before{content:'【'}.cat-title::after{content:'】'}
+
+/* ── 分類摺疊 ── */
+.menu-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:2px 0 4px}
+.menu-tools input[type=text]{flex:1;min-width:130px;padding:8px 10px;font-size:15px;border-radius:10px}
+.catwrap{margin-bottom:2px}
+.cat-head{
+  display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;
+  margin:12px 0 2px;padding:7px 10px;border:2px dashed var(--red);border-radius:10px;
+  background:#FFF6DA;color:var(--red);font-weight:900;font-size:16.5px;
+}
+.cat-head:active{transform:translateY(1px)}
+.cat-head .arw{font-size:13px;transition:transform .15s;flex:0 0 auto}
+.catwrap.open .cat-head .arw{transform:rotate(90deg)}
+.cat-head .cnm{flex:1;min-width:0}
+.cat-head .cnm::before{content:'【'}.cat-head .cnm::after{content:'】'}
+.cat-head .cnt{font-size:13px;font-weight:700;color:var(--ink);opacity:.55;flex:0 0 auto}
+.cat-head .sel{
+  font-size:13px;font-weight:900;background:var(--red);color:#fff;
+  border-radius:999px;padding:1px 9px;flex:0 0 auto;
+}
+.cat-body{display:none;padding:0 2px}
+.catwrap.open>.cat-body{display:block}
+.cat-empty{font-size:14px;padding:6px 2px}
 .item{
   display:flex;align-items:center;gap:8px;padding:9px 2px;
   border-bottom:2px dashed #c9ad6b;
@@ -247,7 +270,7 @@ let toastTimer=null;
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2200); }
 
 /* ══════════════ 全域狀態 ══════════════ */
-let state = { menu:null, restaurant:null, items:[], cart:{}, notes:{}, spicy:{}, sugar:{}, ice:{}, pokeSel:{}, office:localStorage.getItem('office')||'', name:localStorage.getItem('name')||'', myOrderId:null, orders:[] };
+let state = { menu:null, restaurant:null, items:[], cart:{}, notes:{}, spicy:{}, sugar:{}, ice:{}, pokeSel:{}, office:localStorage.getItem('office')||'', name:localStorage.getItem('name')||'', myOrderId:null, orders:[], catIdx:{}, catItems:{}, catOpen:new Set() };
 const SUGARS_ALL=['無糖','一分','三分','五分','八分','正常'];
 const ICES=['去冰','微冰','少冰','正常'];
 const sugarLbl = s => s ? (s==='無糖'?'無糖':s+'糖') : '';
@@ -402,10 +425,35 @@ function renderOrderPage(){
 
   <div class="card">
     <h2>菜單</h2>`;
-  for(const cat in groups){
-    html += `<div class="cat-title">${esc(cat)}</div>`;
-    groups[cat].forEach(it=>{
-      if(it.sugar_mode==='poke'){ html += pokeCardHtml(it); return; }
+  const catKeys = Object.keys(groups);
+  const bigMenu = state.items.length > MENU_FOLD_MIN;
+  state.catIdx={}; state.catItems={};
+  state.catOpen = restoreCatOpen(m.id, catKeys.length, bigMenu);
+  if(catKeys.length>1){
+    html += `<div class="menu-tools">
+      <input type="text" id="menuSearch" placeholder="🔍 搜尋品項" oninput="filterMenu(this.value)">
+      <button class="btn sm gray" onclick="allCats(true)">全開</button>
+      <button class="btn sm gray" onclick="allCats(false)">全收</button>
+    </div>`;
+    if(bigMenu) html += `<div class="muted" style="margin-bottom:6px">📚 品項較多，已自動收合；點分類即可展開</div>`;
+  }
+  catKeys.forEach((cat,ci)=>{
+    const list = groups[cat];
+    state.catItems[ci] = list.map(x=>x.id);
+    list.forEach(x=>{ state.catIdx[x.id]=ci; });
+    const isOpenCat = catKeys.length===1 ? true : state.catOpen.has(ci);
+    if(catKeys.length===1) state.catOpen.add(ci);
+    html += `<div class="catwrap ${isOpenCat?'open':''}" id="cw_${ci}" data-ci="${ci}">
+      <div class="cat-head" onclick="toggleCat(${ci})">
+        <span class="arw">▶</span>
+        <span class="cnm">${esc(cat)}</span>
+        <span class="sel" id="cs_${ci}" style="display:none"></span>
+        <span class="cnt">${list.length} 項</span>
+      </div>
+      <div class="cat-body">`;
+    list.forEach(it=>{
+      html += `<div class="mi" data-nm="${esc(String(it.name||'').toLowerCase())}">`;
+      if(it.sugar_mode==='poke'){ html += pokeCardHtml(it) + `</div>`; return; }
       const q = state.cart[it.id]||0;
       html += `
       <div class="item">
@@ -440,9 +488,11 @@ function renderOrderPage(){
         <input type="text" placeholder="備註（例：換溫泉蛋、不要香菜）" value="${esc(state.notes[it.id]||'')}" oninput="state.notes['${it.id}']=this.value">`;
       }
       html += `
-      <div class="item-note" id="n_${it.id}" style="display:${q>0?'block':'none'}">${opts}</div>`;
+      <div class="item-note" id="n_${it.id}" style="display:${q>0?'block':'none'}">${opts}</div></div>`;
     });
-  }
+    html += `</div></div>`;
+  });
+  html += `<div class="muted cat-empty" id="noHit" style="display:none">🔍 沒有符合的品項</div>`;
   html += `</div>`;
 
   html += wishSectionHtml();
@@ -459,6 +509,7 @@ function renderOrderPage(){
   $('view').innerHTML = html;
   $('bottombar').style.display='block';
   updateCartBar();
+  updateAllCatBadges();
   tryLoadMyOrder();
   startCountdown();
   startPollTimer();
@@ -499,6 +550,66 @@ function chg(id,d){
   $('q_'+id).textContent=q;
   $('n_'+id).style.display = q>0?'block':'none';
   updateCartBar();
+  updateCatBadge(state.catIdx[id]);
+}
+
+/* ══════════════ 菜單分類摺疊 ══════════════ */
+const MENU_FOLD_MIN = 40;            // 品項超過這個數量，預設全部收合
+const catKey = mid => 'catOpen_'+mid;
+function restoreCatOpen(mid, nCats, bigMenu){
+  let arr=null;
+  try{ const raw=sessionStorage.getItem(catKey(mid)); if(raw) arr=JSON.parse(raw); }catch(e){}
+  if(Array.isArray(arr)) return new Set(arr.map(Number));
+  if(bigMenu) return new Set();
+  return new Set(Array.from({length:nCats},(_,i)=>i));
+}
+function saveCatOpen(){
+  try{ if(state.menu) sessionStorage.setItem(catKey(state.menu.id), JSON.stringify([...state.catOpen])); }catch(e){}
+}
+function toggleCat(ci){
+  const w=$('cw_'+ci); if(!w) return;
+  const on = !w.classList.contains('open');
+  w.classList.toggle('open', on);
+  if(on) state.catOpen.add(ci); else state.catOpen.delete(ci);
+  saveCatOpen();
+}
+function allCats(on){
+  document.querySelectorAll('.catwrap').forEach(w=>{
+    const ci=+w.dataset.ci;
+    w.classList.toggle('open', on);
+    if(on) state.catOpen.add(ci); else state.catOpen.delete(ci);
+  });
+  saveCatOpen();
+}
+function openCat(ci){
+  const w=$('cw_'+ci); if(!w) return;
+  w.classList.add('open'); state.catOpen.add(ci);
+}
+function updateCatBadge(ci){
+  if(ci==null) return;
+  const el=$('cs_'+ci); if(!el) return;
+  let n=0;
+  (state.catItems[ci]||[]).forEach(iid=>{ n += state.cart[iid]||0; });
+  el.textContent = n ? ('已點 '+n) : '';
+  el.style.display = n ? '' : 'none';
+}
+function updateAllCatBadges(){ Object.keys(state.catItems).forEach(ci=>updateCatBadge(+ci)); }
+function filterMenu(q){
+  q=(q||'').trim().toLowerCase();
+  let total=0;
+  document.querySelectorAll('.catwrap').forEach(w=>{
+    const ci=+w.dataset.ci; let hit=0;
+    w.querySelectorAll('.mi').forEach(el=>{
+      const ok = !q || (el.dataset.nm||'').indexOf(q)>=0;
+      el.style.display = ok ? '' : 'none';
+      if(ok) hit++;
+    });
+    total += hit;
+    w.style.display = (q && !hit) ? 'none' : '';
+    if(q) w.classList.add('open');
+    else w.classList.toggle('open', state.catOpen.has(ci));
+  });
+  const nh=$('noHit'); if(nh) nh.style.display = (q && !total) ? 'block' : 'none';
 }
 /* ══════════════ 自選波奇組合器 ══════════════ */
 const POKE = {
@@ -538,7 +649,7 @@ function pokePick(id,key,name){
     else { if(arr.length>=g.max){ toast('最多選 '+g.max+' 項'); return; } arr.push(name); }
   }
   if(pokeValid(id)) state.cart[id]=1; else delete state.cart[id];
-  pokeRerender(id); updateCartBar();
+  pokeRerender(id); updateCartBar(); updateCatBadge(state.catIdx[id]);
 }
 function pokeGroupsHtml(id){
   const s=pokeInit(id); let h='';
@@ -598,12 +709,18 @@ async function tryLoadMyOrder(){
       if(x.sugar) setSugar(x.item_id, x.sugar);
       if(x.ice) setIce(x.item_id, x.ice);
     });
+    const hitCats=new Set();
+    (data.items||[]).forEach(x=>{ const ci=state.catIdx[x.item_id]; if(ci!=null) hitCats.add(ci); });
+    hitCats.forEach(ci=>openCat(ci));
+    if(hitCats.size) saveCatOpen();
+    updateAllCatBadges();
     if(hint) hint.innerHTML = `<div class="notice" style="margin-top:8px">📋 已載入你先前的訂單，可直接修改後按「更新訂單」<br><button class="btn sm gray" style="margin-top:6px" onclick="cancelMyOrder()">🗑 取消整筆訂單</button></div>`;
     updateCartBar();
   } else {
     state.myOrderId=null;
     if(hint) hint.innerHTML='';
     updateCartBar();
+    updateAllCatBadges();
   }
 }
 
