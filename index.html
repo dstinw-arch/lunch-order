@@ -616,11 +616,11 @@ const POKE = {
   base: 100,
   groups: [
     { key:'base',    label:'① 基底（選 1）',            min:1, max:1, type:'single',
-      opts:[['生菜',0],['藜麥飯',0],['紫米飯',0],['藜麥飯菜各半',0],['紫米飯菜各半',0],['藜麥飯一半',0],['紫米飯一半',0],['不飯不菜',0]] },
+      opts:[['生菜',0],['藜麥飯',0],['紫米飯',0],['天使細麵',0],['藜麥飯菜各半',0],['紫米飯菜各半',0],['天使細麵菜各半',0],['藜麥飯一半',0],['紫米飯一半',0],['不飯不菜',0]] },
     { key:'veg',     label:'② 配料（選 1–5）',          min:1, max:5, type:'multi',
       opts:[['毛豆',0],['玉米',0],['豆腐',0],['水煮蛋',0],['小黃瓜',0],['季節時蔬(蘋果)',0],['菠菜',0],['黑豆',0],['花椰菜',0],['秋葵',0],['泡菜(小辣)',0],['玉米筍',0],['地瓜泥',0],['紫洋蔥',0]] },
     { key:'protein', label:'③ 蛋白質加購（選 0–5，另計價）', min:0, max:5, type:'multi',
-      opts:[['雞胸肉50克',40],['雞胸肉100克',70],['胡椒牛50克',50],['胡椒牛100克',95],['蝦蝦5隻',70],['鮭魚(生)50克',90],['鮭魚(炙燒)50克',90],['鮪魚(生)50克',80],['鮪魚(炙燒)50克',80]] },
+      opts:[['雞胸肉50克',40],['雞胸肉100克',70],['胡椒牛50克',60],['松阪豬50克',55],['小卷3隻',90],['蝦蝦5隻',70],['鮭魚(生)50克',90],['鮭魚(炙燒)50克',90],['鮪魚(生)50克',80],['鮪魚(炙燒)50克',80]] },
     { key:'sauce',   label:'④ 醬汁（選 1）',            min:1, max:1, type:'single',
       opts:[['柚子油醋',0],['哇沙米油醋',0],['塔塔醬',0],['胡麻醬',0],['蜂蜜芥末',0],['是拉差美乃滋(小辣)',0],['特製辣美乃滋(全素中辣)',0],['水果優格',0],['不醬',0]] },
     { key:'topping', label:'⑤ 撒料（選 1–2）',          min:1, max:2, type:'multi',
@@ -628,8 +628,8 @@ const POKE = {
   ]
 };
 const pokeG = k => POKE.groups.find(g=>g.key===k);
-function pokeInit(id){ if(!state.pokeSel[id]) state.pokeSel[id]={base:'',veg:[],protein:[],sauce:'',topping:[]}; return state.pokeSel[id]; }
-function pokeAdd(id){ const s=pokeInit(id); let a=0; const g=pokeG('protein'); s.protein.forEach(n=>{const o=g.opts.find(o=>o[0]===n); if(o)a+=o[1];}); return a; }
+function pokeInit(id){ if(!state.pokeSel[id]) state.pokeSel[id]={base:'',veg:[],protein:[],sauce:'',topping:[],extra:[]}; if(!state.pokeSel[id].extra) state.pokeSel[id].extra=[]; return state.pokeSel[id]; }
+function pokeAdd(id){ const s=pokeInit(id); let a=0; POKE.groups.forEach(g=>{ const v=s[g.key]; (Array.isArray(v)?v:(v?[v]:[])).forEach(n=>{const o=g.opts.find(o=>o[0]===n); if(o)a+=o[1];}); }); return a; }
 function pokePrice(it){ return POKE.base + pokeAdd(it.id); }
 function pokeValid(id){ const s=pokeInit(id); return !!(s.base && s.veg.length>=1 && s.sauce && s.topping.length>=1); }
 function pokeNote(id){ const s=pokeInit(id); const p=[];
@@ -638,6 +638,7 @@ function pokeNote(id){ const s=pokeInit(id); const p=[];
   if(s.protein.length) p.push('蛋白質:'+s.protein.join('、'));
   p.push('醬:'+(s.sauce||'—'));
   p.push('撒料:'+(s.topping.join('、')||'—'));
+  if(s.extra&&s.extra.length) p.push('加購:'+s.extra.join('、'));
   return p.join('｜');
 }
 function pokePick(id,key,name){
